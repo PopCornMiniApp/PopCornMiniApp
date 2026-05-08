@@ -294,6 +294,13 @@ async def stream_video(file_id: str, request: Request):
     return await stream_file(file_id, request)
 
 
+@app.head("/api/stream/{file_id:path}")
+async def stream_video_head(file_id: str):
+    """HEAD pre-flight — browser video element checks this before streaming."""
+    from app.stream import stream_head_response
+    return stream_head_response(file_id)
+
+
 @app.get("/api/stream-info/{file_id:path}")
 async def stream_info_ep(file_id: str):
     return await get_stream_info(file_id)
