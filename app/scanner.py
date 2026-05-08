@@ -1,8 +1,15 @@
 """
 Full scanner — scans ALL forum topics and messages in the private group
 to register missing movies/series and attach missing file_ids.
+
+Uses raw Pyrogram MTProto API for forum topics (get_forum_topics not available
+in Pyrogram 2.0.106).
 """
-import re, logging, sqlite3
+import re
+import logging
+import sqlite3
+import asyncio
+
 from app.config import PRIVATE_GROUP_ID, DB_PATH
 from app import database as db
 from app.database import push_db_to_hf, set_topic_series_map
@@ -42,7 +49,6 @@ async def _ensure_registered(parsed: dict, topic_id: int) -> bool:
         return True
     elif parsed["type"] == "series":
         already = db.get_series(series_id=parsed["internal_id"])
-        # Always refresh the topic→series map (even if series already exists)
         set_topic_series_map(topic_id, parsed["internal_id"])
         if already: return False
         tmdb = await fetch_series(parsed["tmdb_id"])
@@ -64,7 +70,6 @@ def _movie_by_topic(topic_id: int) -> dict | None:
 def _series_by_topic(topic_id: int) -> dict | None:
     conn = sqlite3.connect(DB_PATH); conn.row_factory = sqlite3.Row
     try:
-        # Try topic_series_map first
         try:
             row = conn.execute(
                 "SELECT s.* FROM series s "
@@ -74,7 +79,6 @@ def _series_by_topic(topic_id: int) -> dict | None:
             if row: return dict(row)
         except sqlite3.OperationalError:
             pass
-        # Fallback via episodes
         row = conn.execute(
             "SELECT s.* FROM series s "
             "INNER JOIN episodes e ON e.series_id=s.id "
@@ -128,12 +132,92 @@ async def _process_file_message(message, topic_id: int) -> bool:
                 "message_id": msg_id,
             })
         elif existing.get("file_id"):
-            return False  # already attached
+            return False
         else:
             db.update_episode_file(series["id"], s_num, e_num, file_id, file_size, duration, msg_id, topic_id)
         logger.info(f"[scanner] Episode: {series['title']} S{s_num:02d}E{e_num:02d}")
         return True
     return False
+
+
+async def _get_forum_topics_raw(pyro_client) -> list:
+    """
+    Fetch all forum topics via raw Pyrogram MTProto.
+    Works with Pyrogram 2.0.106 which lacks the get_forum_topics() helper.
+    """
+    try:
+        from pyrogram.raw.functions.channels import GetForumTopics  # type: ignore
+        from pyrogram.raw.types import InputChannel                  # type: ignore
+    except ImportError:
+        logger.error("[scanner] Pyrogram raw API not available")
+        return []
+
+    # Resolve the channel peer to get its access_hash
+    try:
+        peer = await asyncio.wait_for(
+            pyro_client.resolve_peer(PRIVATE_GROUP_ID), timeout=15
+        )
+        channel_id   = getattr(peer, "channel_id", None)
+        access_hash  = getattr(peer, "access_hash", 0)
+        if not channel_id:
+            logger.error("[scanner] Could not extract channel_id from peer: %s", peer)
+            return []
+    except Exception as e:
+        logger.error("[scanner] resolve_peer failed: %s", e)
+        return []
+
+    all_topics: list = []
+    offset_date  = 0
+    offset_id    = 0
+    offset_topic = 0
+    limit        = 100
+
+    while True:
+        try:
+            result = await asyncio.wait_for(
+                pyro_client.invoke(
+                    GetForumTopics(
+                        channel=InputChannel(channel_id=channel_id, access_hash=access_hash),
+                        q="",
+                        offset_date=offset_date,
+                        offset_id=offset_id,
+                        offset_topic=offset_topic,
+                        limit=limit,
+                    )
+                ),
+                timeout=30,
+            )
+        except Exception as e:
+            logger.error("[scanner] GetForumTopics invoke failed: %s", e)
+            break
+
+        topics = getattr(result, "topics", [])
+        if not topics:
+            break
+
+        # topics is a list of ForumTopic raw objects
+        for t in topics:
+            # Wrap in a simple namespace to match the existing scanner interface
+            all_topics.append(type("Topic", (), {
+                "id":    getattr(t, "id", 0),
+                "title": getattr(t, "title", ""),
+            })())
+
+        if len(topics) < limit:
+            break
+
+        # Prepare next page offsets
+        last = topics[-1]
+        offset_topic = getattr(last, "id", 0)
+        # offset_date and offset_id come from the last message in the topic
+        msgs = getattr(result, "messages", [])
+        if msgs:
+            last_msg = msgs[-1]
+            offset_date = getattr(last_msg, "date", 0)
+            offset_id   = getattr(last_msg, "id",   0)
+
+    logger.info("[scanner] GetForumTopics raw: %d topics fetched", len(all_topics))
+    return all_topics
 
 
 async def run_full_scan(pyro_client) -> dict:
@@ -144,15 +228,14 @@ async def run_full_scan(pyro_client) -> dict:
     results = {"topics_scanned": 0, "registered": 0, "files_attached": 0, "errors": 0}
     changed = False
 
-    # ── Step 1: Get all forum topics ─────────────────────────────────────────
+    # ── Step 1: Get all forum topics (via raw MTProto) ───────────────────────
     topics = []
     try:
-        async for topic in pyro_client.get_forum_topics(PRIVATE_GROUP_ID):
-            topics.append(topic)
+        topics = await _get_forum_topics_raw(pyro_client)
         results["topics_scanned"] = len(topics)
         logger.info(f"[scanner] {len(topics)} topics found")
     except Exception as e:
-        logger.error(f"[scanner] get_forum_topics: {e}")
+        logger.error(f"[scanner] get_forum_topics_raw: {e}")
         results["errors"] += 1
 
     # Build map: topic_id → parsed info
