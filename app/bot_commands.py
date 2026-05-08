@@ -181,7 +181,8 @@ async def callback_admin_fullscan(update: Update, context: ContextTypes.DEFAULT_
                 reply_markup=_admin_kbd(),
             )
             return
-        results = await run_full_scan(_pyro_clients[0])
+        user_bot = _pyro_clients[1] if len(_pyro_clients) > 1 else _pyro_clients[0]
+        results = await run_full_scan(user_bot)
         s = db.get_stats()
         await query.edit_message_text(
             f"✅ *اكتمل المسح!*\n\n"

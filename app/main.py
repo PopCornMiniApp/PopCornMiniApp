@@ -101,7 +101,8 @@ async def _cmd_fullscan(update, context):
         return
     msg = await update.effective_message.reply_text("🔍 جارٍ مسح المجموعة الخاصة... قد يستغرق دقائق.")
     try:
-        results = await run_full_scan(_pyro_clients[0])
+        user_bot = _pyro_clients[1] if len(_pyro_clients) > 1 else _pyro_clients[0]
+        results = await run_full_scan(user_bot)
         s = db.get_stats()
         await msg.edit_text(
             f"✅ اكتمل المسح!\n\n"
@@ -156,7 +157,9 @@ async def _startup_catch_up():
         from app.smart_sync import run_catch_up_sync
         if _pyro_clients:
             logger.info("🔄 Running startup catch-up sync...")
-            results = await run_catch_up_sync(_pyro_clients[0])
+            # Use user bot (s1) instead of bot account for smart sync
+            user_bot = _pyro_clients[1] if len(_pyro_clients) > 1 else _pyro_clients[0]
+            results = await run_catch_up_sync(user_bot)
             logger.info(
                 f"✅ Catch-up complete: scanned={results['messages_scanned']} "
                 f"registered={results['registered']} files={results['files_attached']}"
@@ -176,7 +179,9 @@ async def _periodic_smart_sync():
             from app.smart_sync import run_smart_sync
             if _pyro_clients:
                 logger.info("🔄 Smart sync: checking for new content...")
-                results = await run_smart_sync(_pyro_clients[0])
+                # Use user bot (s1) instead of bot account for smart sync
+                user_bot = _pyro_clients[1] if len(_pyro_clients) > 1 else _pyro_clients[0]
+                results = await run_smart_sync(user_bot)
                 if results['registered'] > 0 or results['files_attached'] > 0:
                     logger.info(
                         f"✅ Smart sync found updates: registered={results['registered']} "
@@ -200,7 +205,8 @@ async def _periodic_autoscan():
             from app.scanner import run_full_scan
             if _pyro_clients:
                 logger.info("🔍 Full scan: starting comprehensive group scan...")
-                results = await run_full_scan(_pyro_clients[0])
+                user_bot = _pyro_clients[1] if len(_pyro_clients) > 1 else _pyro_clients[0]
+                results = await run_full_scan(user_bot)
                 logger.info(
                     f"✅ Full scan complete: topics={results['topics_scanned']} "
                     f"new={results['registered']} files={results['files_attached']} "
@@ -655,7 +661,8 @@ async def admin_fullscan(request: Request):
     if not _pyro_clients:
         raise HTTPException(503, "No Pyrogram clients available")
     
-    results = await run_full_scan(_pyro_clients[0])
+    user_bot = _pyro_clients[1] if len(_pyro_clients) > 1 else _pyro_clients[0]
+    results = await run_full_scan(user_bot)
     s = db.get_stats()
     return {"ok": True, "scan": results, "stats": s}
 

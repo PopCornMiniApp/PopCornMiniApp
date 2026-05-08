@@ -144,44 +144,35 @@ async def _process_file_message(message, topic_id: int) -> bool:
 
 async def _get_input_channel(pyro_client):
     """
-    Get InputChannel for PRIVATE_GROUP_ID.
-    Uses GetChannels(access_hash=0) which Telegram allows for bots that are members.
+    Resolve the private group to an InputChannel using get_chat() instead of GetChannels.
+    This method works reliably with User Bots.
     """
     try:
-        from pyrogram.raw.functions.channels import GetChannels  # type: ignore
-        from pyrogram.raw.types import InputChannel              # type: ignore
+        from pyrogram.raw.types import InputChannel  # type: ignore
     except ImportError:
-        return None, None
-
-    raw_id = abs(PRIVATE_GROUP_ID)
-    s = str(raw_id)
-    if s.startswith("100"):
-        raw_id = int(s[3:])
+        return None
 
     try:
-        result = await asyncio.wait_for(
-            pyro_client.invoke(GetChannels(id=[InputChannel(channel_id=raw_id, access_hash=0)])),
-            timeout=15,
+        # Use get_chat() which works for User Bots
+        chat = await pyro_client.get_chat(PRIVATE_GROUP_ID)
+        
+        # Get the peer to extract channel_id and access_hash
+        peer = await pyro_client.resolve_peer(PRIVATE_GROUP_ID)
+        
+        logger.info(
+            "[scanner] Successfully resolved group: %s (ID: %d)",
+            chat.title,
+            chat.id
         )
-        chats = getattr(result, "chats", [])
-        if chats:
-            ch = chats[0]
-            access_hash = getattr(ch, "access_hash", 0)
-            logger.info("[scanner] Got access_hash via GetChannels for channel_id=%d", raw_id)
-            return raw_id, access_hash
-    except Exception as e:
-        logger.warning("[scanner] GetChannels(hash=0) failed: %s", e)
-
-    # Fallback: resolve peer via Pyrogram's internal cache
-    try:
-        peer = await asyncio.wait_for(pyro_client.resolve_peer(PRIVATE_GROUP_ID), timeout=10)
-        ch_id  = getattr(peer, "channel_id", raw_id)
-        a_hash = getattr(peer, "access_hash", 0)
-        logger.info("[scanner] Got peer via resolve_peer: channel_id=%d", ch_id)
-        return ch_id, a_hash
+        
+        return InputChannel(
+            channel_id=peer.channel_id,
+            access_hash=peer.access_hash
+        )
+        
     except Exception as e:
         logger.error("[scanner] Could not resolve private group peer: %s", e)
-        return None, None
+        return None
 
 
 async def _get_forum_topics_raw(pyro_client) -> list:
@@ -196,8 +187,8 @@ async def _get_forum_topics_raw(pyro_client) -> list:
         logger.error("[scanner] Pyrogram raw API not available")
         return []
 
-    channel_id, access_hash = await _get_input_channel(pyro_client)
-    if not channel_id:
+    input_channel = await _get_input_channel(pyro_client)
+    if not input_channel:
         logger.error("[scanner] Cannot get InputChannel for private group")
         return []
 
@@ -212,7 +203,7 @@ async def _get_forum_topics_raw(pyro_client) -> list:
             result = await asyncio.wait_for(
                 pyro_client.invoke(
                     GetForumTopics(
-                        channel=InputChannel(channel_id=channel_id, access_hash=access_hash),
+                        channel=input_channel,
                         q="",
                         offset_date=offset_date,
                         offset_id=offset_id,
@@ -386,8 +377,8 @@ async def run_full_scan(pyro_client) -> dict:
     changed = False
 
     # ── Resolve the group peer ───────────────────────────────────────────────
-    channel_id, access_hash = await _get_input_channel(pyro_client)
-    if not channel_id:
+    input_channel = await _get_input_channel(pyro_client)
+    if not input_channel:
         logger.error("[scanner] Cannot resolve private group peer — aborting scan")
         results["errors"] += 1
         return results
@@ -418,7 +409,7 @@ async def run_full_scan(pyro_client) -> dict:
 
     # ── Step 2: Iterate messages via channels.GetMessages (bot-compatible) ───
     try:
-        max_id = await _get_channel_max_msg_id(pyro_client, channel_id, access_hash)
+        max_id = await _get_channel_max_msg_id(pyro_client, input_channel.channel_id, input_channel.access_hash)
         logger.info("[scanner] Scanning messages 1..%d via channels.GetMessages", max_id)
 
         batch_size = 100
@@ -432,11 +423,11 @@ async def run_full_scan(pyro_client) -> dict:
 
             try:
                 from pyrogram.raw.functions.channels import GetMessages as GetChanMsgs  # type: ignore
-                from pyrogram.raw.types import InputChannel, InputMessageID             # type: ignore
+                from pyrogram.raw.types import InputMessageID             # type: ignore
                 result = await asyncio.wait_for(
                     pyro_client.invoke(
                         GetChanMsgs(
-                            channel=InputChannel(channel_id=channel_id, access_hash=access_hash),
+                            channel=input_channel,
                             id=[InputMessageID(id=i) for i in ids],
                         )
                     ),

@@ -61,82 +61,82 @@ async def run_smart_sync(pyro_client, lookback_minutes: int = 10, use_user_bot: 
     logger.info(f"[smart_sync] Starting smart sync from message_id={last_message_id}")
     
     # Get channel info
-    channel_id, access_hash = await _get_input_channel(pyro_client)
-    if not channel_id:
+    input_channel = await _get_input_channel(pyro_client)
+    if not input_channel:
         logger.error("[smart_sync] Cannot resolve private group peer")
-        results["errors"] += 1
-        return results
+        return {
+            "messages_scanned": 0,
+            "topics_found": 0,
+            "registered": 0,
+            "files_attached": 0,
+            "errors": 1,
+            "sync_type": "smart"
+        }
     
     # Get current max message ID
-    # Strategy: Use raw API to get channel info (works with user bots)
+    # Strategy: Try multiple methods to get the highest message ID reliably
+    current_max_id = 0
+    
+    # Method 1: Try get_chat_history (most reliable for user bots)
     try:
-        from pyrogram.raw.functions.channels.get_full_channel import GetFullChannel
-        from pyrogram.raw.types.input_channel import InputChannel
-        
-        # Get full channel info which includes message count
-        full_channel = await pyro_client.invoke(
-            GetFullChannel(
-                channel=InputChannel(
-                    channel_id=channel_id,
-                    access_hash=access_hash
-                )
-            )
-        )
-        
-        # Extract current message count from full_chat
-        full_chat = getattr(full_channel, "full_chat", None)
-        if full_chat:
-            # Try to get the read_inbox_max_id or pts as indicator
-            current_max_id = getattr(full_chat, "read_inbox_max_id", 0)
-            if current_max_id == 0:
-                # Fallback: try pts (message counter)
-                current_max_id = getattr(full_chat, "pts", 0)
-            
-            if current_max_id == 0:
-                logger.warning("[smart_sync] Could not determine current max message ID from channel info")
-                # Last resort: scan recent messages to find max ID
-                try:
-                    msgs = await _get_messages_batch(pyro_client, channel_id, access_hash, list(range(1, 101)))
-                    real_msgs = [m for m in msgs if type(m).__name__ != "MessageEmpty" and getattr(m, "id", 0) > 0]
-                    if real_msgs:
-                        current_max_id = max(getattr(m, "id", 0) for m in real_msgs)
-                        logger.info(f"[smart_sync] Found max ID from recent scan: {current_max_id}")
-                    else:
-                        logger.error("[smart_sync] No messages found in recent scan")
-                        return results
-                except Exception as scan_err:
-                    logger.error(f"[smart_sync] Failed to scan for max ID: {scan_err}")
-                    return results
-        else:
-            logger.error("[smart_sync] Could not get full_chat from GetFullChannel")
-            results["errors"] += 1
-            return results
-            
-        logger.info(f"[smart_sync] Current max message ID: {current_max_id}")
-        
+        logger.info("[smart_sync] Method 1: Trying get_chat_history...")
+        async for message in pyro_client.get_chat_history(PRIVATE_GROUP_ID, limit=1):
+            current_max_id = message.id
+            logger.info(f"[smart_sync] Method 1 success - max ID: {current_max_id}")
+            break
     except Exception as e:
-        logger.error(f"[smart_sync] GetFullChannel failed: {e}")
-        # Fallback: try to scan recent messages
+        logger.warning(f"[smart_sync] Method 1 failed: {e}")
+    
+    # Method 2: If Method 1 failed, scan high message IDs (5000-10000 range)
+    if current_max_id == 0:
         try:
-            logger.info("[smart_sync] Attempting fallback: scanning recent messages...")
-            msgs = await _get_messages_batch(pyro_client, channel_id, access_hash, list(range(1, 101)))
+            logger.info("[smart_sync] Method 2: Scanning high message IDs (5000-10000)...")
+            # Try messages in reverse from 10000 down to find the highest
+            for test_id in range(10000, 5000, -100):
+                msgs = await _get_messages_batch(pyro_client, input_channel.channel_id, input_channel.access_hash, [test_id])
+                real_msgs = [m for m in msgs if type(m).__name__ != "MessageEmpty" and getattr(m, "id", 0) > 0]
+                if real_msgs:
+                    current_max_id = max(getattr(m, "id", 0) for m in real_msgs)
+                    logger.info(f"[smart_sync] Method 2 success - max ID: {current_max_id}")
+                    break
+        except Exception as e:
+            logger.warning(f"[smart_sync] Method 2 failed: {e}")
+    
+    # Method 3: Fallback - scan first 3000 messages to find max
+    if current_max_id == 0:
+        try:
+            logger.info("[smart_sync] Method 3: Scanning first 3000 messages...")
+            msgs = await _get_messages_batch(pyro_client, input_channel.channel_id, input_channel.access_hash, list(range(1, 3001)))
             real_msgs = [m for m in msgs if type(m).__name__ != "MessageEmpty" and getattr(m, "id", 0) > 0]
             if real_msgs:
                 current_max_id = max(getattr(m, "id", 0) for m in real_msgs)
-                logger.info(f"[smart_sync] Fallback successful - max ID: {current_max_id}")
+                logger.info(f"[smart_sync] Method 3 success - max ID: {current_max_id}")
             else:
-                logger.error("[smart_sync] Fallback failed - no messages found")
+                logger.error("[smart_sync] Method 3 failed - no messages found")
                 results["errors"] += 1
                 return results
-        except Exception as fallback_err:
-            logger.error(f"[smart_sync] Fallback also failed: {fallback_err}")
+        except Exception as e:
+            logger.error(f"[smart_sync] Method 3 failed: {e}")
             results["errors"] += 1
             return results
     
-    # If this is first sync, scan last 100 messages only
+    if current_max_id == 0:
+        logger.error("[smart_sync] All methods failed to get max message ID")
+        results["errors"] += 1
+        return results
+    
+    logger.info(f"[smart_sync] Current max message ID: {current_max_id}")
+    
+    # If this is first sync, we should run full scan instead
     if last_message_id == 0:
-        last_message_id = max(0, current_max_id - 100)
-        logger.info(f"[smart_sync] First sync, starting from {last_message_id}")
+        logger.warning(
+            f"[smart_sync] First sync detected (last_message_id=0). "
+            f"Smart sync is not suitable for initial sync. "
+            f"Please run /fullscan command or use admin panel to perform full scan. "
+            f"For now, will scan last 500 messages only."
+        )
+        last_message_id = max(0, current_max_id - 500)
+        logger.info(f"[smart_sync] Starting from message {last_message_id} (last 500 messages)")
     
     # Calculate message range to scan
     start_id = last_message_id + 1
@@ -157,7 +157,7 @@ async def run_smart_sync(pyro_client, lookback_minutes: int = 10, use_user_bot: 
         ids = list(range(batch_start, batch_end + 1))
         
         try:
-            msgs = await _get_messages_batch(pyro_client, channel_id, access_hash, ids)
+            msgs = await _get_messages_batch(pyro_client, input_channel.channel_id, input_channel.access_hash, ids)
             
             # Filter real messages with content
             real_msgs = [

@@ -16,21 +16,37 @@ def get_connection() -> sqlite3.Connection:
 
 
 def init_db():
-    """Download DB from HF Dataset if exists, otherwise create fresh."""
-    try:
-        local_path = hf_hub_download(
-            repo_id=HF_DATASET_NAME,
-            filename=DATASET_DB_FILE,
-            repo_type="dataset",
-            token=HF_TOKEN,
-            local_dir="/tmp",
-        )
-        logger.info(f"Downloaded DB from HuggingFace: {local_path}")
-        if local_path != DB_PATH:
-            import shutil
-            shutil.copy(local_path, DB_PATH)
-    except Exception as e:
-        logger.warning(f"Could not download DB from HF (will create fresh): {e}")
+    """Download DB from HF Dataset only if local DB doesn't exist or is old."""
+    import time
+    
+    # Check if local database exists and is recent (less than 24 hours old)
+    db_exists = os.path.exists(DB_PATH)
+    db_is_recent = False
+    
+    if db_exists:
+        db_age_hours = (time.time() - os.path.getmtime(DB_PATH)) / 3600
+        db_is_recent = db_age_hours < 24
+        logger.info(f"Local database exists (age: {db_age_hours:.1f} hours)")
+    
+    # Only download from HuggingFace if DB doesn't exist or is old
+    if not db_exists or not db_is_recent:
+        try:
+            logger.info("Downloading database from HuggingFace...")
+            local_path = hf_hub_download(
+                repo_id=HF_DATASET_NAME,
+                filename=DATASET_DB_FILE,
+                repo_type="dataset",
+                token=HF_TOKEN,
+                local_dir="/tmp",
+            )
+            logger.info(f"Downloaded DB from HuggingFace: {local_path}")
+            if local_path != DB_PATH:
+                import shutil
+                shutil.copy(local_path, DB_PATH)
+        except Exception as e:
+            logger.warning(f"Could not download DB from HF (will create fresh): {e}")
+    else:
+        logger.info(f"Using existing local database: {DB_PATH}")
 
     conn = get_connection()
     _create_schema(conn)
