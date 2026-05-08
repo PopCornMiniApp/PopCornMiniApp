@@ -140,6 +140,52 @@ async def _process_file_message(message, topic_id: int) -> bool:
     return False
 
 
+async def _get_input_channel(pyro_client):
+    """
+    Get InputChannel for PRIVATE_GROUP_ID.
+    Uses GetChannels(access_hash=0) which Telegram allows for bots that are members.
+    Falls back to get_chat() to extract the peer data.
+    """
+    try:
+        from pyrogram.raw.functions.channels import GetChannels  # type: ignore
+        from pyrogram.raw.types import InputChannel              # type: ignore
+    except ImportError:
+        return None, None
+
+    # Strip -100 prefix
+    raw_id = abs(PRIVATE_GROUP_ID)
+    s = str(raw_id)
+    if s.startswith("100"):
+        raw_id = int(s[3:])
+
+    # Try GetChannels with access_hash=0 first
+    try:
+        result = await asyncio.wait_for(
+            pyro_client.invoke(GetChannels(id=[InputChannel(channel_id=raw_id, access_hash=0)])),
+            timeout=15,
+        )
+        chats = getattr(result, "chats", [])
+        if chats:
+            ch = chats[0]
+            access_hash = getattr(ch, "access_hash", 0)
+            logger.info("[scanner] Got access_hash via GetChannels for channel_id=%d", raw_id)
+            return raw_id, access_hash
+    except Exception as e:
+        logger.warning("[scanner] GetChannels(hash=0) failed: %s", e)
+
+    # Fallback: use get_chat, then resolve_peer to get the InputPeer
+    try:
+        await asyncio.wait_for(pyro_client.get_chat(PRIVATE_GROUP_ID), timeout=15)
+        peer = await asyncio.wait_for(pyro_client.resolve_peer(PRIVATE_GROUP_ID), timeout=10)
+        ch_id   = getattr(peer, "channel_id", raw_id)
+        a_hash  = getattr(peer, "access_hash", 0)
+        logger.info("[scanner] Got peer via get_chat+resolve_peer: channel_id=%d", ch_id)
+        return ch_id, a_hash
+    except Exception as e:
+        logger.error("[scanner] Could not resolve private group peer: %s", e)
+        return None, None
+
+
 async def _get_forum_topics_raw(pyro_client) -> list:
     """
     Fetch all forum topics via raw Pyrogram MTProto.
@@ -152,18 +198,9 @@ async def _get_forum_topics_raw(pyro_client) -> list:
         logger.error("[scanner] Pyrogram raw API not available")
         return []
 
-    # Resolve the channel peer to get its access_hash
-    try:
-        peer = await asyncio.wait_for(
-            pyro_client.resolve_peer(PRIVATE_GROUP_ID), timeout=15
-        )
-        channel_id   = getattr(peer, "channel_id", None)
-        access_hash  = getattr(peer, "access_hash", 0)
-        if not channel_id:
-            logger.error("[scanner] Could not extract channel_id from peer: %s", peer)
-            return []
-    except Exception as e:
-        logger.error("[scanner] resolve_peer failed: %s", e)
+    channel_id, access_hash = await _get_input_channel(pyro_client)
+    if not channel_id:
+        logger.error("[scanner] Cannot get InputChannel for private group")
         return []
 
     all_topics: list = []
@@ -195,9 +232,7 @@ async def _get_forum_topics_raw(pyro_client) -> list:
         if not topics:
             break
 
-        # topics is a list of ForumTopic raw objects
         for t in topics:
-            # Wrap in a simple namespace to match the existing scanner interface
             all_topics.append(type("Topic", (), {
                 "id":    getattr(t, "id", 0),
                 "title": getattr(t, "title", ""),
@@ -206,10 +241,8 @@ async def _get_forum_topics_raw(pyro_client) -> list:
         if len(topics) < limit:
             break
 
-        # Prepare next page offsets
         last = topics[-1]
         offset_topic = getattr(last, "id", 0)
-        # offset_date and offset_id come from the last message in the topic
         msgs = getattr(result, "messages", [])
         if msgs:
             last_msg = msgs[-1]
