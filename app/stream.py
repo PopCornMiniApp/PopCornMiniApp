@@ -160,61 +160,97 @@ async def init_pyrogram():
     # Restore session files from HF Dataset (contains cached peer access_hashes)
     _restore_sessions()
 
+    def _is_bot_token(value: str) -> bool:
+        """Bot tokens look like '123456789:ABCdef…'. Session strings are long base64."""
+        import re
+        return bool(re.match(r'^\d+:[A-Za-z0-9_-]{30,}$', value.strip()))
+
     # ── Session list ────────────────────────────────────────────────────────
-    # MAIN_BOT_TOKEN FIRST — it is definitely a member of PRIVATE_GROUP_ID
-    # and can access all stored messages (it's the sync/receive bot).
-    # STREAM_BOT_1/2 added as extra load-balancing slots if they're in the group.
-    sessions = []
+    # MAIN_BOT_TOKEN — always a real bot token (used for Bot API sync too).
+    # STREAM_BOT_1/2 — may be Pyrogram USER session strings OR bot tokens.
+    #   Session strings are long base64; bot tokens match digits:letters.
+    sessions: list[tuple] = []   # (value, api_id, api_hash, name, is_bot)
     if MAIN_BOT_TOKEN:
-        sessions.append((MAIN_BOT_TOKEN, SESSION_1_API_ID, SESSION_1_API_HASH, "main"))
+        sessions.append((MAIN_BOT_TOKEN, SESSION_1_API_ID, SESSION_1_API_HASH, "main", True))
     if STREAM_BOT_1:
-        sessions.append((STREAM_BOT_1, SESSION_1_API_ID, SESSION_1_API_HASH, "s1"))
+        is_bot = _is_bot_token(STREAM_BOT_1)
+        sessions.append((STREAM_BOT_1, SESSION_1_API_ID, SESSION_1_API_HASH, "s1", is_bot))
     if STREAM_BOT_2:
+        is_bot2 = _is_bot_token(STREAM_BOT_2)
         sessions.append((STREAM_BOT_2,
                          SESSION_2_API_ID or SESSION_1_API_ID,
-                         SESSION_2_API_HASH or SESSION_1_API_HASH, "s2"))
+                         SESSION_2_API_HASH or SESSION_1_API_HASH, "s2", is_bot2))
 
     any_resolved = False
-    for token, api_id, api_hash, name in sessions:
+    for value, api_id, api_hash, name, is_bot in sessions:
         try:
-            client = Client(
-                name=f"popcorn_{name}",
-                bot_token=token,
-                api_id=api_id,
-                api_hash=api_hash,
-                no_updates=True,
-                workdir="/tmp",
-                sleep_threshold=60,
-            )
+            if is_bot:
+                client = Client(
+                    name=f"popcorn_{name}",
+                    bot_token=value,
+                    api_id=api_id,
+                    api_hash=api_hash,
+                    no_updates=True,
+                    workdir="/tmp",
+                    sleep_threshold=60,
+                )
+            else:
+                # Pyrogram user session string — no bot_token arg, no api_id/hash required in string
+                client = Client(
+                    name=f"popcorn_{name}",
+                    session_string=value,
+                    api_id=api_id,
+                    api_hash=api_hash,
+                    no_updates=True,
+                    sleep_threshold=60,
+                )
             await client.start()
+            client_type = "bot" if is_bot else "user-session"
+            logger.info("✅ Pyrogram client '%s' (%s) started", name, client_type)
 
-            # Populate peer cache by fetching all dialogs (groups/chats the bot is in).
-            # This is the only reliable way for a fresh session to discover group peers.
+            # Populate peer cache via get_dialogs (works for both bots and user accounts
+            # that are members of the group).
             group_found = False
             try:
                 async for dialog in client.get_dialogs():
                     chat = dialog.chat
                     cid = getattr(chat, "id", None)
-                    if cid and abs(cid) == abs(PRIVATE_GROUP_ID):
+                    if cid and abs(int(str(cid))) == abs(PRIVATE_GROUP_ID):
                         group_found = True
                         logger.info(
-                            "✅ Pyrogram client '%s' found private group: %s",
+                            "✅ Pyrogram client '%s' found private group in dialogs: %s",
                             name, getattr(chat, "title", cid)
                         )
                         break
                 if not group_found:
-                    logger.warning(
-                        "Pyrogram client '%s': private group not found in dialogs — "
-                        "is the bot a member of group %s?",
-                        name, PRIVATE_GROUP_ID
-                    )
+                    # For bots: get_dialogs may not list supergroups — try get_chat directly
+                    if is_bot:
+                        try:
+                            chat = await asyncio.wait_for(
+                                client.get_chat(PRIVATE_GROUP_ID), timeout=15
+                            )
+                            group_found = True
+                            logger.info(
+                                "✅ Pyrogram bot '%s' accessed private group via get_chat: %s",
+                                name, getattr(chat, "title", PRIVATE_GROUP_ID)
+                            )
+                        except Exception as ge:
+                            logger.warning(
+                                "Pyrogram bot '%s' cannot access private group (not a member?): %s",
+                                name, ge
+                            )
+                    else:
+                        logger.warning(
+                            "Pyrogram user '%s': private group not found in dialogs",
+                            name
+                        )
             except Exception as de:
-                logger.warning("Pyrogram client '%s' get_dialogs failed: %s", name, de)
+                logger.warning("Pyrogram client '%s' get_dialogs error: %s", name, de)
 
             _pyro_clients.append(client)
             if group_found:
                 any_resolved = True
-            logger.info("✅ Pyrogram client '%s' started (group_found=%s)", name, group_found)
+            logger.info("Pyrogram client '%s' ready (group_found=%s)", name, group_found)
         except Exception as exc:
             logger.error("Pyrogram client '%s' failed: %s", name, exc)
 
