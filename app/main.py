@@ -8,11 +8,12 @@ from app import database as db
 from app.database import init_db, push_db_to_hf
 from app.stream import stream_file, get_stream_info, init_pyrogram, stop_pyrogram
 from app.config import MAIN_BOT_TOKEN, ADMIN_ID
-from app.cache import cache_get, cache_set, cache_clear_prefix, cache_clear_all
+from app.smart_cache import cache_get, cache_set, cache_clear_prefix, cache_clear_all, cache_get_stats
+from app.security import require_admin, rate_limit, validate_request_security, security_logger
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
-_bot_task = _sync_task = _autoscan_task = None
+_bot_task = _sync_task = _autoscan_task = _smart_sync_task = None
 
 
 # ── Backward-compat shims ────────────────────────────────────────────────────
@@ -24,8 +25,8 @@ def _cache_clear_prefix(prefix: str): return cache_clear_prefix(prefix)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _bot_task, _sync_task, _autoscan_task
-    logger.info("🍿 PopCorn v3 starting…")
+    global _bot_task, _sync_task, _autoscan_task, _smart_sync_task
+    logger.info("🍿 PopCorn v4.2 starting…")
     init_db()
     await init_pyrogram()
 
@@ -66,13 +67,19 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error(f"Bot start error: {e}", exc_info=True)
 
-    _sync_task    = asyncio.create_task(_periodic_db_push())
-    _autoscan_task = asyncio.create_task(_periodic_autoscan())
+    _sync_task       = asyncio.create_task(_periodic_db_push())
+    _smart_sync_task = asyncio.create_task(_periodic_smart_sync())
+    _autoscan_task   = asyncio.create_task(_periodic_autoscan())
+    
+    # Run catch-up sync on startup
+    asyncio.create_task(_startup_catch_up())
+    
     yield
 
-    if _bot_task:      _bot_task.cancel()
-    if _sync_task:     _sync_task.cancel()
-    if _autoscan_task: _autoscan_task.cancel()
+    if _bot_task:         _bot_task.cancel()
+    if _sync_task:        _sync_task.cancel()
+    if _smart_sync_task:  _smart_sync_task.cancel()
+    if _autoscan_task:    _autoscan_task.cancel()
     await stop_pyrogram()
 
 
@@ -141,30 +148,81 @@ async def _periodic_db_push():
             logger.error(f"Periodic DB push error: {e}")
 
 
+async def _startup_catch_up():
+    """Run catch-up sync on startup to get any missed messages."""
+    await asyncio.sleep(30)  # Wait 30 seconds for Pyrogram to be ready
+    try:
+        from app.stream import _pyro_clients
+        from app.smart_sync import run_catch_up_sync
+        if _pyro_clients:
+            logger.info("🔄 Running startup catch-up sync...")
+            results = await run_catch_up_sync(_pyro_clients[0])
+            logger.info(
+                f"✅ Catch-up complete: scanned={results['messages_scanned']} "
+                f"registered={results['registered']} files={results['files_attached']}"
+            )
+        else:
+            logger.warning("Catch-up skipped: no Pyrogram clients available")
+    except Exception as e:
+        logger.error(f"Catch-up sync error: {e}", exc_info=True)
+
+
+async def _periodic_smart_sync():
+    """Every 5 minutes: smart sync to catch new content quickly."""
+    await asyncio.sleep(60)  # Wait 1 minute after startup
+    while True:
+        try:
+            from app.stream import _pyro_clients
+            from app.smart_sync import run_smart_sync
+            if _pyro_clients:
+                logger.info("🔄 Smart sync: checking for new content...")
+                results = await run_smart_sync(_pyro_clients[0])
+                if results['registered'] > 0 or results['files_attached'] > 0:
+                    logger.info(
+                        f"✅ Smart sync found updates: registered={results['registered']} "
+                        f"files={results['files_attached']}"
+                    )
+                else:
+                    logger.debug("Smart sync: no new content")
+            else:
+                logger.warning("Smart sync skipped: no Pyrogram clients available")
+        except Exception as e:
+            logger.error(f"Smart sync error: {e}", exc_info=True)
+        await asyncio.sleep(300)  # 5 minutes
+
+
 async def _periodic_autoscan():
-    """Every 2 hours: run a full scan to pick up any new content added to the group."""
-    await asyncio.sleep(120)  # Wait 2 minutes after startup before first scan
+    """Every 1 hour: run a full scan to ensure nothing was missed."""
+    await asyncio.sleep(180)  # Wait 3 minutes after startup before first scan
     while True:
         try:
             from app.stream import _pyro_clients
             from app.scanner import run_full_scan
             if _pyro_clients:
-                logger.info("Auto-scan: starting periodic group scan…")
+                logger.info("🔍 Full scan: starting comprehensive group scan...")
                 results = await run_full_scan(_pyro_clients[0])
                 logger.info(
-                    f"Auto-scan done: topics={results['topics_scanned']} "
+                    f"✅ Full scan complete: topics={results['topics_scanned']} "
                     f"new={results['registered']} files={results['files_attached']} "
                     f"errors={results['errors']}"
                 )
             else:
-                logger.warning("Auto-scan skipped: no Pyrogram clients available")
+                logger.warning("Full scan skipped: no Pyrogram clients available")
         except Exception as e:
-            logger.error(f"Auto-scan error: {e}", exc_info=True)
-        await asyncio.sleep(7200)  # 2 hours
+            logger.error(f"Full scan error: {e}", exc_info=True)
+        await asyncio.sleep(3600)  # 1 hour (changed from 2 hours)
 
 
-app = FastAPI(title="PopCorn API 🍿", version="3.3.0", lifespan=lifespan)
+app = FastAPI(title="PopCorn API 🍿", version="4.2.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+# Security middleware - validate all requests
+@app.middleware("http")
+async def security_middleware(request: Request, call_next):
+    """Security validation middleware"""
+    await validate_request_security(request)
+    response = await call_next(request)
+    return response
 
 
 def _j(obj: dict, fields: list[str]):
@@ -404,13 +462,15 @@ async def stream_info_ep(file_id: str):
 
 
 @app.get("/api/debug/stream-test/{file_id:path}")
-async def debug_stream_test_ep(file_id: str):
+@require_admin
+async def debug_stream_test_ep(request: Request, file_id: str):
     from app.stream import debug_stream_test
     return await debug_stream_test(file_id)
 
 
 @app.get("/api/debug/bot-membership")
-async def debug_bot_membership():
+@require_admin
+async def debug_bot_membership(request: Request):
     from app.stream import _pyro_clients
     from app.config import PRIVATE_GROUP_ID
     results = []
@@ -431,7 +491,8 @@ async def debug_bot_membership():
 
 
 @app.get("/api/debug/dialogs")
-async def debug_dialogs():
+@require_admin
+async def debug_dialogs(request: Request):
     """List first 20 dialogs from each Pyrogram client — for peer cache diagnostics."""
     from app.stream import _pyro_clients
     from app.config import PRIVATE_GROUP_ID
@@ -454,7 +515,8 @@ async def debug_dialogs():
 
 
 @app.get("/api/debug/forum-topics")
-async def debug_forum_topics():
+@require_admin
+async def debug_forum_topics(request: Request):
     """Test raw MTProto GetForumTopics on the private group."""
     from app.stream import _pyro_clients
     from app.config import PRIVATE_GROUP_ID
@@ -491,7 +553,8 @@ async def debug_forum_topics():
 
 
 @app.get("/api/debug/pyro-errors")
-async def debug_pyro_errors():
+@require_admin
+async def debug_pyro_errors(request: Request):
     """Show Pyrogram startup errors for diagnostics."""
     from app.stream import _pyro_start_errors, _pyro_clients
     return {
@@ -501,11 +564,18 @@ async def debug_pyro_errors():
 
 
 @app.get("/api/debug/config")
-async def debug_config():
+@require_admin
+async def debug_config(request: Request):
     """Show non-sensitive config values for diagnostics."""
     from app.config import PRIVATE_GROUP_ID, PUBLIC_CHANNEL_ID, ADMIN_ID, SESSION_1_API_ID, SESSION_2_API_ID
     from app.config import MAIN_BOT_TOKEN, STREAM_BOT_1, STREAM_BOT_2
     import re
+
+@app.get("/api/cache/stats")
+@require_admin
+async def cache_stats(request: Request):
+    """Get cache statistics (Admin only)."""
+    return cache_get_stats()
     def mask(v: str) -> str:
         if not v: return "(not set)"
         if re.match(r'^\d+:[A-Za-z0-9_-]{30,}$', v.strip()): return f"bot_token:{v[:10]}..."
@@ -524,7 +594,8 @@ async def debug_config():
 
 
 @app.get("/api/search")
-async def search(q: str = Query("", min_length=1), limit: int = Query(20)):
+@rate_limit(max_requests=30, window_seconds=60)
+async def search(request: Request, q: str = Query("", min_length=1), limit: int = Query(20)):
     import sqlite3 as sq
     from app.config import DB_PATH
     conn = sq.connect(DB_PATH); conn.row_factory = sq.Row; term = f"%{q}%"
@@ -550,7 +621,8 @@ async def search(q: str = Query("", min_length=1), limit: int = Query(20)):
 
 
 @app.post("/api/admin/register_topic")
-async def admin_register(payload: dict):
+@require_admin
+async def admin_register(request: Request, payload: dict):
     from app.sync_bot import register_topic, parse_topic_name
     name = payload.get("topic_name", "")
     topic_id = payload.get("topic_id", 0)
@@ -565,32 +637,459 @@ async def admin_register(payload: dict):
 
 
 @app.post("/api/admin/cache_clear")
+@require_admin
 async def admin_cache_clear(request: Request):
     """Admin endpoint to manually clear all API cache."""
-    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
-    if body.get("admin_id") != ADMIN_ID and str(body.get("admin_id")) != str(ADMIN_ID):
-        raise HTTPException(403, "Forbidden")
     cache_clear_all()
     return {"ok": True, "message": "Cache cleared"}
 
 
 @app.post("/api/admin/fullscan")
+@require_admin
 async def admin_fullscan(request: Request):
     """Admin endpoint to trigger a full group scan."""
-    body = {}
-    try:
-        body = await request.json()
-    except Exception:
-        pass
-    if str(body.get("admin_id", "")) != str(ADMIN_ID):
-        raise HTTPException(403, "Forbidden")
     from app.stream import _pyro_clients
     from app.scanner import run_full_scan
+    from app import database as db
+    
     if not _pyro_clients:
         raise HTTPException(503, "No Pyrogram clients available")
+    
     results = await run_full_scan(_pyro_clients[0])
     s = db.get_stats()
     return {"ok": True, "scan": results, "stats": s}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Ads System Endpoints (UI only - disabled by default)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/ads/config")
+async def get_ads_config():
+    """Get ads system configuration."""
+    from app.database import get_ads_config
+    return get_ads_config()
+
+
+@app.get("/api/ads/banners")
+async def get_banners(limit: int = Query(5, ge=1, le=20)):
+    """Get active banner ads."""
+    from app.database import get_ads_config, get_active_banners
+    
+    config = get_ads_config()
+    if not config.get("enabled") or not config.get("banner_enabled"):
+        return {"banners": [], "enabled": False}
+    
+    banners = get_active_banners(limit=limit)
+    return {"banners": banners, "enabled": True}
+
+
+@app.post("/api/ads/impression/{ad_id}")
+async def log_banner_impression(ad_id: int, request: Request):
+    """Log banner ad impression."""
+    from app.database import log_ad_impression
+    
+    client_ip = request.client.host if request.client else "unknown"
+    page_url = request.headers.get("referer", "")
+    
+    log_ad_impression(
+        ad_id=ad_id,
+        ip_address=client_ip,
+        page_url=page_url
+    )
+    
+    return {"ok": True}
+
+
+@app.post("/api/ads/click/{ad_id}")
+async def log_banner_click(ad_id: int, request: Request):
+    """Log banner ad click."""
+    from app.database import log_ad_click
+    
+    client_ip = request.client.host if request.client else "unknown"
+    
+    log_ad_click(
+        ad_id=ad_id,
+        ip_address=client_ip
+    )
+    
+    return {"ok": True}
+
+
+@app.post("/api/admin/ads/config")
+@require_admin
+async def update_ads_config_endpoint(request: Request):
+    """Update ads configuration (Admin only)."""
+    from app.database import update_ads_config
+    
+    body = await request.json()
+    
+    update_ads_config(
+        enabled=body.get("enabled"),
+        banner_enabled=body.get("banner_enabled"),
+        banner_interval=body.get("banner_interval"),
+        banner_duration=body.get("banner_duration")
+    )
+    
+    return {"ok": True, "message": "Ads config updated"}
+
+
+@app.get("/api/admin/ads/banners")
+@require_admin
+async def list_all_banners(request: Request):
+    """List all banner ads (Admin only)."""
+    import sqlite3
+    from app.config import DB_PATH
+    
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute("""
+            SELECT * FROM ads_banners 
+            ORDER BY priority DESC, created_at DESC
+        """).fetchall()
+        return {"banners": [dict(r) for r in rows]}
+    finally:
+        conn.close()
+
+
+@app.post("/api/admin/ads/banner")
+@require_admin
+async def create_banner(request: Request):
+    """Create new banner ad (Admin only)."""
+    import sqlite3
+    from app.config import DB_PATH
+    
+    body = await request.json()
+    
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        cursor = conn.execute("""
+            INSERT INTO ads_banners 
+            (title, description, image_url, link_url, position, priority, active, start_date, end_date)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            body.get("title"),
+            body.get("description"),
+            body.get("image_url"),
+            body.get("link_url"),
+            body.get("position", "bottom"),
+            body.get("priority", 0),
+            body.get("active", 1),
+            body.get("start_date"),
+            body.get("end_date")
+        ))
+        conn.commit()
+        return {"ok": True, "id": cursor.lastrowid}
+    finally:
+        conn.close()
+
+
+@app.put("/api/admin/ads/banner/{banner_id}")
+@require_admin
+async def update_banner(banner_id: int, request: Request):
+    """Update banner ad (Admin only)."""
+    import sqlite3
+    from app.config import DB_PATH
+    
+    body = await request.json()
+    
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        updates = []
+        params = []
+        
+        for field in ["title", "description", "image_url", "link_url", "position", 
+                      "priority", "active", "start_date", "end_date"]:
+            if field in body:
+                updates.append(f"{field}=?")
+                params.append(body[field])
+        
+        if updates:
+            updates.append("updated_at=datetime('now')")
+            query = f"UPDATE ads_banners SET {', '.join(updates)} WHERE id=?"
+            params.append(banner_id)
+            conn.execute(query, params)
+            conn.commit()
+        
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+@app.delete("/api/admin/ads/banner/{banner_id}")
+@require_admin
+async def delete_banner(banner_id: int, request: Request):
+    """Delete banner ad (Admin only)."""
+    import sqlite3
+    from app.config import DB_PATH
+    
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute("DELETE FROM ads_banners WHERE id=?", (banner_id,))
+        conn.commit()
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+@app.get("/api/admin/ads/stats")
+@require_admin
+async def get_ads_stats(request: Request, days: int = Query(7, ge=1, le=90)):
+    """Get ads statistics (Admin only)."""
+    import sqlite3
+    from app.config import DB_PATH
+    
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        cutoff = f"datetime('now', '-{days} days')"
+        
+        # Banner performance
+        banners = conn.execute(f"""
+            SELECT
+                b.id, b.title, b.impressions, b.clicks,
+                CASE WHEN b.impressions > 0
+                     THEN ROUND(CAST(b.clicks AS FLOAT) / b.impressions * 100, 2)
+                     ELSE 0 END AS ctr,
+                COUNT(DISTINCT i.id) AS recent_impressions,
+                COUNT(DISTINCT c.id) AS recent_clicks
+            FROM ads_banners b
+            LEFT JOIN ads_impressions i ON b.id = i.ad_id AND i.created_at >= {cutoff}
+            LEFT JOIN ads_clicks c ON b.id = c.ad_id AND c.created_at >= {cutoff}
+            GROUP BY b.id
+            ORDER BY b.impressions DESC
+        """).fetchall()
+        
+        return {
+            "banners": [dict(b) for b in banners],
+            "period_days": days
+        }
+    finally:
+        conn.close()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Subscription System Endpoints (UI only - disabled by default)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/subscriptions/config")
+async def get_subscription_config():
+    """Get subscription system configuration."""
+    from app.database import get_subscription_config
+    return get_subscription_config()
+
+
+@app.get("/api/subscriptions/plans")
+async def get_plans():
+    """Get available subscription plans."""
+    from app.database import get_subscription_config, get_subscription_plans
+    
+    config = get_subscription_config()
+    if not config.get("enabled"):
+        return {"plans": [], "enabled": False}
+    
+    plans = get_subscription_plans(active_only=True)
+    return {"plans": plans, "enabled": True}
+
+
+@app.get("/api/subscriptions/user/{user_id}")
+async def get_user_subscription_endpoint(user_id: int):
+    """Get user's active subscription."""
+    from app.database import get_user_subscription
+    
+    subscription = get_user_subscription(user_id)
+    return {"subscription": subscription}
+
+
+@app.get("/api/subscriptions/check/{user_id}")
+async def check_premium_status(user_id: int):
+    """Check if user has premium subscription."""
+    from app.database import is_user_premium
+    
+    is_premium = is_user_premium(user_id)
+    return {"user_id": user_id, "is_premium": is_premium}
+
+
+@app.post("/api/admin/subscriptions/config")
+@require_admin
+async def update_subscription_config_endpoint(request: Request):
+    """Update subscription configuration (Admin only)."""
+    from app.database import update_subscription_config
+    
+    body = await request.json()
+    
+    update_subscription_config(
+        enabled=body.get("enabled"),
+        trial_enabled=body.get("trial_enabled"),
+        trial_days=body.get("trial_days")
+    )
+    
+    return {"ok": True, "message": "Subscription config updated"}
+
+
+@app.get("/api/admin/subscriptions/plans")
+@require_admin
+async def list_all_plans(request: Request):
+    """List all subscription plans (Admin only)."""
+    from app.database import get_subscription_plans
+    
+    plans = get_subscription_plans(active_only=False)
+    return {"plans": plans}
+
+
+@app.post("/api/admin/subscriptions/plan")
+@require_admin
+async def create_plan(request: Request):
+    """Create new subscription plan (Admin only)."""
+    import sqlite3, json
+    from app.config import DB_PATH
+    
+    body = await request.json()
+    
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        features = json.dumps(body.get("features", []))
+        
+        cursor = conn.execute("""
+            INSERT INTO subscription_plans 
+            (name, name_ar, description, description_ar, price, currency, 
+             duration_days, features, active, priority)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            body.get("name"),
+            body.get("name_ar"),
+            body.get("description"),
+            body.get("description_ar"),
+            body.get("price"),
+            body.get("currency", "USD"),
+            body.get("duration_days"),
+            features,
+            body.get("active", 1),
+            body.get("priority", 0)
+        ))
+        conn.commit()
+        return {"ok": True, "id": cursor.lastrowid}
+    finally:
+        conn.close()
+
+
+@app.put("/api/admin/subscriptions/plan/{plan_id}")
+@require_admin
+async def update_plan(plan_id: int, request: Request):
+    """Update subscription plan (Admin only)."""
+    import sqlite3, json
+    from app.config import DB_PATH
+    
+    body = await request.json()
+    
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        updates = []
+        params = []
+        
+        for field in ["name", "name_ar", "description", "description_ar", 
+                      "price", "currency", "duration_days", "active", "priority"]:
+            if field in body:
+                updates.append(f"{field}=?")
+                params.append(body[field])
+        
+        if "features" in body:
+            updates.append("features=?")
+            params.append(json.dumps(body["features"]))
+        
+        if updates:
+            updates.append("updated_at=datetime('now')")
+            query = f"UPDATE subscription_plans SET {', '.join(updates)} WHERE id=?"
+            params.append(plan_id)
+            conn.execute(query, params)
+            conn.commit()
+        
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+@app.get("/api/admin/subscriptions/users")
+@require_admin
+async def list_user_subscriptions(request: Request, 
+                                   status: str = Query(None),
+                                   limit: int = Query(50, ge=1, le=200)):
+    """List user subscriptions (Admin only)."""
+    import sqlite3
+    from app.config import DB_PATH
+    
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        query = """
+            SELECT us.*, sp.name, sp.name_ar, sp.price, sp.currency
+            FROM user_subscriptions us
+            JOIN subscription_plans sp ON us.plan_id = sp.id
+        """
+        params = []
+        
+        if status:
+            query += " WHERE us.status=?"
+            params.append(status)
+        
+        query += " ORDER BY us.created_at DESC LIMIT ?"
+        params.append(limit)
+        
+        rows = conn.execute(query, params).fetchall()
+        return {"subscriptions": [dict(r) for r in rows]}
+    finally:
+        conn.close()
+
+
+@app.get("/api/admin/subscriptions/stats")
+@require_admin
+async def get_subscription_stats(request: Request):
+    """Get subscription statistics (Admin only)."""
+    import sqlite3
+    from app.config import DB_PATH
+    
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        # Count by status
+        stats = conn.execute("""
+            SELECT 
+                status,
+                COUNT(*) as count,
+                SUM(CASE WHEN plan_id > 1 THEN 1 ELSE 0 END) as premium_count
+            FROM user_subscriptions
+            GROUP BY status
+        """).fetchall()
+        
+        # Revenue (last 30 days)
+        revenue = conn.execute("""
+            SELECT 
+                SUM(amount) as total_revenue,
+                COUNT(*) as transaction_count
+            FROM subscription_transactions
+            WHERE status='completed' 
+            AND created_at >= datetime('now', '-30 days')
+        """).fetchone()
+        
+        # Plan distribution
+        plans = conn.execute("""
+            SELECT 
+                sp.name, sp.name_ar, sp.price,
+                COUNT(us.id) as subscriber_count
+            FROM subscription_plans sp
+            LEFT JOIN user_subscriptions us ON sp.id = us.plan_id AND us.status='active'
+            GROUP BY sp.id
+            ORDER BY subscriber_count DESC
+        """).fetchall()
+        
+        return {
+            "status_breakdown": [dict(r) for r in stats],
+            "revenue_30d": dict(revenue) if revenue else {"total_revenue": 0, "transaction_count": 0},
+            "plan_distribution": [dict(r) for r in plans]
+        }
+    finally:
+        conn.close()
 
 
 # ── Static frontend ─────────────────────────────────────────────────────────
@@ -601,5 +1100,9 @@ if _os.path.isdir(_static_dir):
 
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
+        # Don't serve SPA for API routes
+        if full_path.startswith("api/"):
+            from fastapi import HTTPException
+            raise HTTPException(404, "Not Found")
         index = _os.path.join(_static_dir, "index.html")
         return FileResponse(index)
