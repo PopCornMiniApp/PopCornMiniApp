@@ -159,7 +159,7 @@ async def featured():
     try:
         movies = [dict(r) for r in conn.execute(
             "SELECT id,'movie' AS type,title,title_ar,poster_path,backdrop_path,rating,"
-            "release_date AS date,overview,overview_ar,genres "
+            "release_date AS date,overview,overview_ar,genres,1 AS has_file "
             "FROM movies WHERE backdrop_path!='' AND file_id IS NOT NULL ORDER BY rating DESC LIMIT 8"
         ).fetchall()]
         series = [dict(r) for r in conn.execute(
@@ -172,6 +172,7 @@ async def featured():
         items = (movies + series)[:12]
         for it in items:
             _j(it, ["genres"])
+            it["has_file"] = bool(it.get("has_file"))
     finally:
         conn.close()
     result = {"items": items}
