@@ -157,8 +157,15 @@ async def init_pyrogram():
         logger.warning("Pyrogram not installed — streaming limited to ≤20 MB")
         return
 
-    # Restore session files from HF Dataset (contains cached peer access_hashes)
-    _restore_sessions()
+    # Clear any old/corrupt session files from previous runs to avoid startup failures
+    for _sname in ("main", "s1", "s2"):
+        _sf = f"/tmp/popcorn_{_sname}.session"
+        if os.path.exists(_sf):
+            try:
+                os.remove(_sf)
+                logger.info("Cleared old session file: %s", _sf)
+            except Exception:
+                pass
 
     def _is_bot_token(value: str) -> bool:
         """Bot tokens look like '123456789:ABCdef…'. Session strings are long base64."""
