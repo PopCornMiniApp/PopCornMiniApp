@@ -4,7 +4,6 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-
 from app import database as db
 from app.database import init_db, push_db_to_hf
 from app.stream import stream_file, get_stream_info, init_pyrogram, stop_pyrogram
@@ -12,325 +11,272 @@ from app.config import MAIN_BOT_TOKEN, ADMIN_ID
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
-
 _bot_task = _sync_task = None
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _bot_task, _sync_task
-    logger.info("🍿 PopCorn starting…")
+    logger.info("🍿 PopCorn v3 starting…")
     init_db()
     await init_pyrogram()
-
     if MAIN_BOT_TOKEN:
         try:
             from app.sync_bot import build_sync_app
-            from app.bot_commands import cmd_start, cmd_app, cmd_admin
+            from app.bot_commands import cmd_start, cmd_app, cmd_help, cmd_new, cmd_top, cmd_stats, cmd_admin
             from telegram.ext import CommandHandler
             bot_app = build_sync_app()
-            bot_app.add_handler(CommandHandler("start", cmd_start))
-            bot_app.add_handler(CommandHandler("app",   cmd_app))
-            bot_app.add_handler(CommandHandler("admin", cmd_admin))
+            bot_app.add_handler(CommandHandler("start",  cmd_start))
+            bot_app.add_handler(CommandHandler("app",    cmd_app))
+            bot_app.add_handler(CommandHandler("help",   cmd_help))
+            bot_app.add_handler(CommandHandler("new",    cmd_new))
+            bot_app.add_handler(CommandHandler("top",    cmd_top))
+            bot_app.add_handler(CommandHandler("stats",  cmd_stats))
+            bot_app.add_handler(CommandHandler("admin",  cmd_admin))
+            bot_app.add_handler(CommandHandler("sync_db", _cmd_sync_db))
             _bot_task = asyncio.create_task(_run_bot(bot_app))
-            logger.info("✅ Telegram bot started (polling)")
+            logger.info("✅ Telegram bot started")
         except Exception as e:
             logger.error(f"Bot start error: {e}")
-
     _sync_task = asyncio.create_task(_periodic_sync())
     yield
-
-    if _bot_task:   _bot_task.cancel()
-    if _sync_task:  _sync_task.cancel()
+    if _bot_task: _bot_task.cancel()
+    if _sync_task: _sync_task.cancel()
     await stop_pyrogram()
 
+async def _cmd_sync_db(update, context):
+    if update.effective_user.id != ADMIN_ID: return
+    push_db_to_hf()
+    await update.effective_message.reply_text("✅ تمت المزامنة مع HuggingFace!")
 
 async def _run_bot(bot_app):
     try:
-        await bot_app.initialize()
-        await bot_app.start()
-        await bot_app.updater.start_polling(drop_pending_updates=False, allowed_updates=[
-            "message", "edited_message", "callback_query",
-        ])
+        await bot_app.initialize(); await bot_app.start()
+        await bot_app.updater.start_polling(drop_pending_updates=False, allowed_updates=["message","edited_message","callback_query"])
         await asyncio.Event().wait()
     except asyncio.CancelledError:
-        try:
-            await bot_app.updater.stop()
-            await bot_app.stop()
-            await bot_app.shutdown()
-        except Exception:
-            pass
-
+        try: await bot_app.updater.stop(); await bot_app.stop(); await bot_app.shutdown()
+        except Exception: pass
 
 async def _periodic_sync():
     while True:
         await asyncio.sleep(600)
-        try:
-            push_db_to_hf()
-        except Exception as e:
-            logger.error(f"Periodic sync error: {e}")
+        try: push_db_to_hf()
+        except Exception as e: logger.error(f"Periodic sync error: {e}")
 
-
-app = FastAPI(title="PopCorn API 🍿", version="2.0.0", lifespan=lifespan)
-
+app = FastAPI(title="PopCorn API 🍿", version="3.0.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-
-# ── Health ─────────────────────────────────────────────────────────────────────
 @app.get("/api/health")
 async def health():
     from app.stream import _pyro_clients
-    return {"status": "ok", "service": "PopCorn API 🍿", "pyrogram": bool(_pyro_clients)}
+    return {"status":"ok","service":"PopCorn API 🍿","pyrogram":bool(_pyro_clients)}
 
-
-# ── Stats ──────────────────────────────────────────────────────────────────────
 @app.get("/api/stats")
-async def stats():
-    return db.get_stats()
+async def stats(): return db.get_stats()
 
+@app.get("/api/genres")
+async def genres():
+    import sqlite3 as sq, json as js
+    from app.config import DB_PATH
+    conn = sq.connect(DB_PATH)
+    try:
+        raw = [r[0] for r in conn.execute(
+            "SELECT genres FROM movies WHERE genres IS NOT NULL AND genres!='' "
+            "UNION ALL SELECT genres FROM series WHERE genres IS NOT NULL AND genres!=''"
+        ).fetchall()]
+    finally: conn.close()
+    all_genres: set = set()
+    for row in raw:
+        try:
+            gs = js.loads(row) if isinstance(row,str) else row
+            if isinstance(gs,list): all_genres.update(g for g in gs if g)
+        except: pass
+    return {"genres": sorted(all_genres)}
 
-# ── Featured ───────────────────────────────────────────────────────────────────
 @app.get("/api/featured")
 async def featured():
-    conn = __import__('sqlite3').connect(__import__('app.config', fromlist=['DB_PATH']).DB_PATH)
-    conn.row_factory = __import__('sqlite3').Row
+    import sqlite3 as sq
+    from app.config import DB_PATH
+    conn = sq.connect(DB_PATH); conn.row_factory = sq.Row
     try:
         movies = [dict(r) for r in conn.execute(
-            "SELECT id,'movie' as type,title,title_ar,poster_path,backdrop_path,rating,release_date as date "
+            "SELECT id,'movie' AS type,title,title_ar,poster_path,backdrop_path,rating,release_date AS date,overview,overview_ar,genres "
             "FROM movies WHERE backdrop_path!='' AND file_id IS NOT NULL ORDER BY rating DESC LIMIT 8"
         ).fetchall()]
         series = [dict(r) for r in conn.execute(
-            "SELECT id,'series' as type,title,title_ar,poster_path,backdrop_path,rating,first_air_date as date "
+            "SELECT id,'series' AS type,title,title_ar,poster_path,backdrop_path,rating,first_air_date AS date,overview,overview_ar,genres "
             "FROM series WHERE backdrop_path!='' ORDER BY rating DESC LIMIT 4"
         ).fetchall()]
-        return {"items": (movies + series)[:10]}
-    finally:
-        conn.close()
+        items = (movies + series)[:12]
+        for it in items: _j(it,["genres"])
+        return {"items": items}
+    finally: conn.close()
 
-
-# ── Movies ─────────────────────────────────────────────────────────────────────
 @app.get("/api/movies")
 async def list_movies(
-    limit: int = Query(24, ge=1, le=100),
-    offset: int = Query(0, ge=0),
-    genre: str = Query(None),
-    search: str = Query(None),
-    has_file: bool = Query(None),
+    limit:int=Query(24,ge=1,le=100), offset:int=Query(0,ge=0),
+    genre:str=Query(None), search:str=Query(None),
+    has_file:bool=Query(None), sort:str=Query("newest"),
 ):
     import sqlite3 as sq
     from app.config import DB_PATH
-    conn = sq.connect(DB_PATH)
-    conn.row_factory = sq.Row
+    conn = sq.connect(DB_PATH); conn.row_factory = sq.Row
     try:
-        q = "SELECT * FROM movies WHERE 1=1"
-        p: list = []
-        if genre:
-            q += " AND genres LIKE ?"; p.append(f"%{genre}%")
+        q = "SELECT * FROM movies WHERE 1=1"; p: list = []
+        if genre: q+=" AND genres LIKE ?"; p.append(f"%{genre}%")
         if search:
-            q += " AND (title LIKE ? OR title_ar LIKE ?)"; p += [f"%{search}%"] * 2
-        if has_file is True:
-            q += " AND file_id IS NOT NULL"
-        q += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
-        p += [limit, offset]
-        rows = [dict(r) for r in conn.execute(q, p).fetchall()]
-        total = conn.execute(q.replace("SELECT *","SELECT COUNT(*)").split("LIMIT")[0], p[:-2]).fetchone()[0]
-    finally:
-        conn.close()
-    for m in rows:
-        _j(m, ["genres", "cast"])
-    return {"items": rows, "total": total, "limit": limit, "offset": offset}
-
+            term=f"%{search}%"
+            q+=" AND (title LIKE ? OR title_ar LIKE ? OR LOWER(title) LIKE LOWER(?) OR LOWER(title_ar) LIKE LOWER(?))"
+            p+=[term,term,term,term]
+        if has_file is True: q+=" AND file_id IS NOT NULL"
+        elif has_file is False: q+=" AND file_id IS NULL"
+        order={"newest":"created_at DESC","rating":"rating DESC","title":"title_ar ASC"}.get(sort,"created_at DESC")
+        q+=f" ORDER BY {order} LIMIT ? OFFSET ?"; p+=[limit,offset]
+        rows=[dict(r) for r in conn.execute(q,p).fetchall()]
+        total=conn.execute(q.replace("SELECT *","SELECT COUNT(*)").split("ORDER BY")[0],p[:-2]).fetchone()[0]
+    finally: conn.close()
+    for m in rows: _j(m,["genres","cast"])
+    return {"items":rows,"total":total,"limit":limit,"offset":offset}
 
 @app.get("/api/movies/{movie_id}")
-async def get_movie(movie_id: str):
-    m = db.get_movie(movie_id=movie_id)
-    if not m:
-        raise HTTPException(404, "Movie not found")
-    _j(m, ["genres", "cast"])
+async def get_movie(movie_id:str):
+    m=db.get_movie(movie_id=movie_id)
+    if not m: raise HTTPException(404,"Movie not found")
+    _j(m,["genres","cast"])
+    # CRITICAL: do NOT call get_stream_info — it hangs for 45s via Bot API
     if m.get("file_id"):
-        m["stream_info"] = await get_stream_info(m["file_id"])
+        m["stream_url"]=f"/api/stream/{m['file_id']}"
+        m["has_file"]=True; m["file_size"]=m.get("file_size") or 0
+    else:
+        m["has_file"]=False; m["stream_url"]=None
     return m
 
-
-# ── Series ─────────────────────────────────────────────────────────────────────
 @app.get("/api/series")
 async def list_series(
-    limit: int = Query(24, ge=1, le=100),
-    offset: int = Query(0, ge=0),
-    genre: str = Query(None),
-    search: str = Query(None),
+    limit:int=Query(24,ge=1,le=100), offset:int=Query(0,ge=0),
+    genre:str=Query(None), search:str=Query(None), sort:str=Query("newest"),
 ):
     import sqlite3 as sq
     from app.config import DB_PATH
-    conn = sq.connect(DB_PATH)
-    conn.row_factory = sq.Row
+    conn = sq.connect(DB_PATH); conn.row_factory = sq.Row
     try:
-        q = "SELECT * FROM series WHERE 1=1"
-        p: list = []
-        if genre:
-            q += " AND genres LIKE ?"; p.append(f"%{genre}%")
+        q="SELECT * FROM series WHERE 1=1"; p:list=[]
+        if genre: q+=" AND genres LIKE ?"; p.append(f"%{genre}%")
         if search:
-            q += " AND (title LIKE ? OR title_ar LIKE ?)"; p += [f"%{search}%"] * 2
-        q += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
-        p += [limit, offset]
-        rows = [dict(r) for r in conn.execute(q, p).fetchall()]
-        total = conn.execute(q.replace("SELECT *","SELECT COUNT(*)").split("LIMIT")[0], p[:-2]).fetchone()[0]
-    finally:
-        conn.close()
-    for s in rows:
-        _j(s, ["genres", "cast"])
-    return {"items": rows, "total": total, "limit": limit, "offset": offset}
-
+            term=f"%{search}%"
+            q+=" AND (title LIKE ? OR title_ar LIKE ? OR LOWER(title) LIKE LOWER(?) OR LOWER(title_ar) LIKE LOWER(?))"
+            p+=[term,term,term,term]
+        order={"newest":"created_at DESC","rating":"rating DESC","title":"title_ar ASC"}.get(sort,"created_at DESC")
+        q+=f" ORDER BY {order} LIMIT ? OFFSET ?"; p+=[limit,offset]
+        rows=[dict(r) for r in conn.execute(q,p).fetchall()]
+        total=conn.execute(q.replace("SELECT *","SELECT COUNT(*)").split("ORDER BY")[0],p[:-2]).fetchone()[0]
+    finally: conn.close()
+    for s in rows: _j(s,["genres","cast"])
+    return {"items":rows,"total":total,"limit":limit,"offset":offset}
 
 @app.get("/api/series/{series_id}")
-async def get_series(series_id: str):
-    s = db.get_series(series_id=series_id)
-    if not s:
-        raise HTTPException(404, "Series not found")
-    _j(s, ["genres", "cast"])
-    episodes = db.get_episodes(series_id)
-    seasons: dict[int, list] = {}
+async def get_series(series_id:str):
+    s=db.get_series(series_id=series_id)
+    if not s: raise HTTPException(404,"Series not found")
+    _j(s,["genres","cast"])
+    episodes=db.get_episodes(series_id)
+    seasons: dict[int,list]={}
     for ep in episodes:
-        sn = ep["season_number"]
-        seasons.setdefault(sn, []).append(ep)
-    s["seasons"] = seasons
+        ep["stream_url"]=f"/api/stream/{ep['file_id']}" if ep.get("file_id") else None
+        ep["has_file"]=bool(ep.get("file_id"))
+        seasons.setdefault(ep["season_number"],[]).append(ep)
+    s["seasons"]={str(k):v for k,v in sorted(seasons.items())}
+    s["total_seasons_available"]=len(seasons)
     return s
 
-
 @app.get("/api/series/{series_id}/episodes")
-async def series_episodes(series_id: str, season: int = Query(None)):
-    return {"items": db.get_episodes(series_id, season_number=season)}
+async def series_episodes(series_id:str, season:int=Query(None)):
+    eps=db.get_episodes(series_id,season_number=season)
+    for ep in eps:
+        ep["stream_url"]=f"/api/stream/{ep['file_id']}" if ep.get("file_id") else None
+        ep["has_file"]=bool(ep.get("file_id"))
+    return {"items":eps}
 
-
-# ── Stream ─────────────────────────────────────────────────────────────────────
 @app.get("/api/stream/{file_id:path}")
-async def stream_video(file_id: str, request: Request):
-    return await stream_file(file_id, request)
-
+async def stream_video(file_id:str, request:Request):
+    return await stream_file(file_id,request)
 
 @app.get("/api/stream-info/{file_id:path}")
-async def stream_info(file_id: str):
-    info = await get_stream_info(file_id)
-    return info
+async def stream_info_ep(file_id:str):
+    return await get_stream_info(file_id)
 
-
-# ── Search ─────────────────────────────────────────────────────────────────────
 @app.get("/api/search")
-async def search(q: str = Query("", min_length=1), limit: int = Query(20)):
-    movies = db.get_movies(limit=limit, search=q)
-    series = db.get_series_list(limit=limit, search=q)
-    for m in movies: _j(m, ["genres", "cast"])
-    for s in series: _j(s, ["genres", "cast"])
-    return {"movies": movies, "series": series}
+async def search(q:str=Query("",min_length=1), limit:int=Query(20)):
+    import sqlite3 as sq
+    from app.config import DB_PATH
+    conn=sq.connect(DB_PATH); conn.row_factory=sq.Row; term=f"%{q}%"
+    try:
+        movies=[dict(r) for r in conn.execute(
+            "SELECT * FROM movies WHERE title LIKE ? OR title_ar LIKE ? OR LOWER(title) LIKE LOWER(?) OR LOWER(title_ar) LIKE LOWER(?) ORDER BY rating DESC LIMIT ?",
+            [term,term,term,term,limit]).fetchall()]
+        series=[dict(r) for r in conn.execute(
+            "SELECT * FROM series WHERE title LIKE ? OR title_ar LIKE ? OR LOWER(title) LIKE LOWER(?) OR LOWER(title_ar) LIKE LOWER(?) ORDER BY rating DESC LIMIT ?",
+            [term,term,term,term,limit]).fetchall()]
+    finally: conn.close()
+    for m in movies: _j(m,["genres","cast"])
+    for s in series: _j(s,["genres","cast"])
+    return {"movies":movies,"series":series,"query":q}
 
-
-# ── Admin ──────────────────────────────────────────────────────────────────────
 @app.post("/api/admin/register_topic")
-async def admin_register(payload: dict):
-    from app.sync_bot import register_topic, parse_topic_name, _map_topic_to_series
-    name = payload.get("topic_name", "")
-    tid  = int(payload.get("topic_id", 0))
-    ok   = await register_topic(name, tid)
-    parsed = parse_topic_name(name)
-    if parsed and parsed["type"] == "series":
-        _map_topic_to_series(tid, parsed["internal_id"])
-    return {"ok": ok}
-
+async def admin_register(payload:dict):
+    from app.sync_bot import register_topic,parse_topic_name,_map_topic_to_series
+    name=payload.get("topic_name",""); tid=int(payload.get("topic_id",0))
+    ok=await register_topic(name,tid)
+    parsed=parse_topic_name(name)
+    if parsed and parsed["type"]=="series": _map_topic_to_series(tid,parsed["internal_id"])
+    return {"ok":ok}
 
 @app.post("/api/admin/sync_db")
-async def admin_sync():
-    push_db_to_hf()
-    return {"ok": True}
-
+async def admin_sync(): push_db_to_hf(); return {"ok":True}
 
 @app.post("/api/admin/bulk_register")
-async def admin_bulk(payload: dict):
-    """Register multiple topics at once."""
-    topics = payload.get("topics", [])
-    results = []
+async def admin_bulk(payload:dict):
+    topics=payload.get("topics",[]); results=[]
     for t in topics:
-        from app.sync_bot import register_topic, parse_topic_name, _map_topic_to_series
-        ok = await register_topic(t["topic_name"], t["topic_id"])
-        parsed = parse_topic_name(t["topic_name"])
-        if parsed and parsed["type"] == "series":
-            _map_topic_to_series(t["topic_id"], parsed["internal_id"])
-        results.append({"topic": t["topic_name"], "ok": ok})
-    push_db_to_hf()
-    return {"results": results}
-
+        from app.sync_bot import register_topic,parse_topic_name,_map_topic_to_series
+        ok=await register_topic(t["topic_name"],t["topic_id"])
+        parsed=parse_topic_name(t["topic_name"])
+        if parsed and parsed["type"]=="series": _map_topic_to_series(t["topic_id"],parsed["internal_id"])
+        results.append({"topic":t["topic_name"],"ok":ok})
+    push_db_to_hf(); return {"results":results}
 
 @app.post("/api/admin/bulk_update_fileids")
-async def admin_bulk_update_fileids(payload: dict):
-    """Directly set file_ids for movies and episodes from external collection."""
+async def admin_bulk_update_fileids(payload:dict):
     from app.config import DB_PATH
     import sqlite3 as sq
-
-    movies   = payload.get("movies", {})
-    episodes = payload.get("episodes", {})
-
-    conn = sq.connect(DB_PATH)
-    movies_updated = episodes_updated = 0
+    movies=payload.get("movies",{}); episodes=payload.get("episodes",{})
+    conn=sq.connect(DB_PATH); mu=eu=0
     try:
-        for movie_id, d in movies.items():
-            conn.execute(
-                "UPDATE movies SET file_id=?, file_size=?, duration=?, message_id=?, updated_at=datetime('now') WHERE id=?",
-                (d["file_id"], d.get("file_size", 0), d.get("duration", 0), d.get("message_id", 0), movie_id)
-            )
-            movies_updated += 1
-
-        for key, d in episodes.items():
-            sid    = d["series_id"]
-            season = d["season"]
-            ep     = d["ep"]
-            conn.execute("""
-                INSERT INTO episodes (series_id, season_number, episode_number, file_id, file_size, duration, message_id, topic_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 0)
-                ON CONFLICT(series_id, season_number, episode_number) DO UPDATE SET
-                    file_id=excluded.file_id, file_size=excluded.file_size,
-                    duration=excluded.duration, message_id=excluded.message_id
-            """, (sid, season, ep, d["file_id"], d.get("file_size", 0), d.get("duration", 0), d.get("message_id", 0)))
-            episodes_updated += 1
-
+        for mid,d in movies.items():
+            conn.execute("UPDATE movies SET file_id=?,file_size=?,duration=?,message_id=?,updated_at=datetime('now') WHERE id=?",
+                (d["file_id"],d.get("file_size",0),d.get("duration",0),d.get("message_id",0),mid)); mu+=1
+        for _,d in episodes.items():
+            conn.execute("""INSERT INTO episodes (series_id,season_number,episode_number,file_id,file_size,duration,message_id,topic_id)
+                VALUES (?,?,?,?,?,?,?,0) ON CONFLICT(series_id,season_number,episode_number) DO UPDATE SET
+                file_id=excluded.file_id,file_size=excluded.file_size,duration=excluded.duration,message_id=excluded.message_id""",
+                (d["series_id"],d["season"],d["ep"],d["file_id"],d.get("file_size",0),d.get("duration",0),d.get("message_id",0))); eu+=1
         conn.commit()
-        logger.info(f"bulk_update_fileids: {movies_updated} movies, {episodes_updated} episodes")
-    finally:
-        conn.close()
-
-    push_db_to_hf()
-    return {"ok": True, "movies_updated": movies_updated, "episodes_updated": episodes_updated}
-
+    finally: conn.close()
+    push_db_to_hf(); return {"ok":True,"movies_updated":mu,"episodes_updated":eu}
 
 @app.post("/api/admin/scan_file_ids")
 async def admin_scan_file_ids():
-    """
-    Use Pyrogram MTProto to read messages directly from the private group
-    and extract file_ids WITHOUT forwarding anything to anyone.
-    This keeps the bot silent — it only reads, never writes.
-    """
-    from app.config import PRIVATE_GROUP_ID, DB_PATH
+    from app.config import PRIVATE_GROUP_ID,DB_PATH
     from app.stream import _pyro_clients
-    import sqlite3 as sq
-    import asyncio as aio
-
-    if not _pyro_clients:
-        raise HTTPException(503, "Pyrogram not available — cannot scan without MTProto")
-
-    GROUP_ID = PRIVATE_GROUP_ID or -1003826837517
-    pyro = _pyro_clients[0]
-
-    MOVIE_MSGS: dict[str, int] = {
-        'mid00001': 4713, 'mid00002': 4715, 'mid00003': 4717,
-        'mid00004': 4719, 'mid00005': 4721, 'mid00006': 4723,
-        'mid00007': 4726, 'mid00008': 4728, 'mid00009': 4730,
-        'mid00010': 4733, 'mid00011': 4735, 'mid00012': 4737,
-        'mid00013': 4739, 'mid00014': 4742, 'mid00015': 4744,
-        'mid00016': 4746, 'mid00017': 4748, 'mid00018': 4750,
-        'mid00019': 4752, 'mid00020': 4847, 'mid00021': 4849,
-        'mid00022': 4852,
-    }
-
-    EPISODE_MSGS: dict[tuple, int] = {}
-    for msg_id, ep_num, season, series_id in [
+    import sqlite3 as sq, asyncio as aio
+    if not _pyro_clients: raise HTTPException(503,"Pyrogram not available")
+    GROUP_ID=PRIVATE_GROUP_ID or -1003826837517; pyro=_pyro_clients[0]
+    MOVIE_MSGS={'mid00001':4713,'mid00002':4715,'mid00003':4717,'mid00004':4719,'mid00005':4721,'mid00006':4723,
+        'mid00007':4726,'mid00008':4728,'mid00009':4730,'mid00010':4733,'mid00011':4735,'mid00012':4737,
+        'mid00013':4739,'mid00014':4742,'mid00015':4744,'mid00016':4746,'mid00017':4748,'mid00018':4750,
+        'mid00019':4752,'mid00020':4847,'mid00021':4849,'mid00022':4852}
+    EPISODE_MSGS={}
+    for msg_id,ep_num,season,series_id in [
         (4660,1,1,'sid00001'),(4661,2,1,'sid00001'),(4662,3,1,'sid00001'),(4663,4,1,'sid00001'),(4664,5,1,'sid00001'),
         (4675,1,2,'sid00001'),(4676,2,2,'sid00001'),(4677,3,2,'sid00001'),(4678,4,2,'sid00001'),(4679,5,2,'sid00001'),
         (4680,6,2,'sid00001'),(4681,7,2,'sid00001'),(4682,8,2,'sid00001'),(4683,9,2,'sid00001'),
@@ -350,91 +296,46 @@ async def admin_scan_file_ids():
         (4836,1,4,'sid00003'),(4837,2,4,'sid00003'),(4838,3,4,'sid00003'),(4839,4,4,'sid00003'),
         (4840,5,4,'sid00003'),(4841,6,4,'sid00003'),(4842,7,4,'sid00003'),(4843,8,4,'sid00003'),
         (4844,9,4,'sid00003'),(4845,10,4,'sid00003'),
-    ]:
-        EPISODE_MSGS[(series_id, season, ep_num)] = msg_id
-
-    # Collect all unique message IDs to fetch
-    all_msg_ids = list(set(MOVIE_MSGS.values()) | set(EPISODE_MSGS.values()))
-
-    msg_data: dict[int, dict] = {}
-
-    async def fetch_one(msg_id: int):
-        """Read message directly from group via Pyrogram — no forwarding."""
+    ]: EPISODE_MSGS[(series_id,season,ep_num)]=msg_id
+    all_ids=list(set(MOVIE_MSGS.values())|set(EPISODE_MSGS.values())); msg_data={}
+    async def fetch_one(mid):
         try:
-            msg = await pyro.get_messages(GROUP_ID, msg_id)
-            media = msg.video or msg.document or msg.audio
-            if media:
-                msg_data[msg_id] = {
-                    "file_id":   media.file_id,
-                    "file_size": getattr(media, "file_size", 0) or 0,
-                    "duration":  getattr(media, "duration", 0) or 0,
-                }
-                logger.info(f"📥 Got file_id for msg {msg_id}: {media.file_id[:20]}…")
-        except Exception as e:
-            logger.warning(f"fetch msg {msg_id} failed: {e}")
-
-    # Fetch in batches of 10 (Pyrogram handles MTProto internally)
-    for i in range(0, len(all_msg_ids), 10):
-        chunk = all_msg_ids[i:i+10]
-        await aio.gather(*[fetch_one(mid) for mid in chunk])
-        await aio.sleep(0.3)
-
-    conn = sq.connect(DB_PATH)
-    movies_updated = episodes_updated = 0
+            msg=await pyro.get_messages(GROUP_ID,mid)
+            media=msg.video or msg.document or msg.audio
+            if media: msg_data[mid]={"file_id":media.file_id,"file_size":getattr(media,"file_size",0) or 0,"duration":getattr(media,"duration",0) or 0}
+        except Exception as e: logger.warning(f"fetch {mid}: {e}")
+    for i in range(0,len(all_ids),10): await aio.gather(*[fetch_one(m) for m in all_ids[i:i+10]]); await aio.sleep(0.3)
+    conn=sq.connect(DB_PATH); mu=eu=0
     try:
-        for movie_id, msg_id in MOVIE_MSGS.items():
+        for mid,msg_id in MOVIE_MSGS.items():
             if msg_id in msg_data:
-                d = msg_data[msg_id]
-                conn.execute(
-                    "UPDATE movies SET file_id=?, file_size=?, duration=?, message_id=?, updated_at=datetime('now') WHERE id=?",
-                    (d["file_id"], d["file_size"], d["duration"], msg_id, movie_id)
-                )
-                movies_updated += 1
-
-        for (series_id, season, ep_num), msg_id in EPISODE_MSGS.items():
+                d=msg_data[msg_id]
+                conn.execute("UPDATE movies SET file_id=?,file_size=?,duration=?,message_id=?,updated_at=datetime('now') WHERE id=?",(d["file_id"],d["file_size"],d["duration"],msg_id,mid)); mu+=1
+        for (sid,season,ep),msg_id in EPISODE_MSGS.items():
             if msg_id in msg_data:
-                d = msg_data[msg_id]
-                conn.execute("""
-                    INSERT INTO episodes (series_id, season_number, episode_number, file_id, file_size, duration, message_id, topic_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, 0)
-                    ON CONFLICT(series_id, season_number, episode_number) DO UPDATE SET
-                        file_id=excluded.file_id, file_size=excluded.file_size,
-                        duration=excluded.duration, message_id=excluded.message_id
-                """, (series_id, season, ep_num, d["file_id"], d["file_size"], d["duration"], msg_id))
-                episodes_updated += 1
+                d=msg_data[msg_id]
+                conn.execute("""INSERT INTO episodes (series_id,season_number,episode_number,file_id,file_size,duration,message_id,topic_id)
+                    VALUES (?,?,?,?,?,?,?,0) ON CONFLICT(series_id,season_number,episode_number) DO UPDATE SET
+                    file_id=excluded.file_id,file_size=excluded.file_size,duration=excluded.duration,message_id=excluded.message_id""",
+                    (sid,season,ep,d["file_id"],d["file_size"],d["duration"],msg_id)); eu+=1
         conn.commit()
-    finally:
-        conn.close()
+    finally: conn.close()
+    push_db_to_hf(); return {"ok":True,"messages_found":len(msg_data),"movies_updated":mu,"episodes_updated":eu}
 
-    push_db_to_hf()
-    return {
-        "ok": True,
-        "messages_found": len(msg_data),
-        "movies_updated": movies_updated,
-        "episodes_updated": episodes_updated,
-    }
-
-
-# ── Frontend SPA ───────────────────────────────────────────────────────────────
-STATIC_DIR = os.path.join(os.path.dirname(__file__), "..", "static")
-
+STATIC_DIR=os.path.join(os.path.dirname(__file__),"..","static")
 if os.path.isdir(STATIC_DIR):
-    _assets = os.path.join(STATIC_DIR, "assets")
-    if os.path.isdir(_assets):
-        app.mount("/assets", StaticFiles(directory=_assets), name="assets")
-
+    _assets=os.path.join(STATIC_DIR,"assets")
+    if os.path.isdir(_assets): app.mount("/assets",StaticFiles(directory=_assets),name="assets")
     @app.get("/{full_path:path}")
-    async def spa(full_path: str):
-        idx = os.path.join(STATIC_DIR, "index.html")
-        return FileResponse(idx) if os.path.isfile(idx) else JSONResponse({"error": "Frontend not built"}, status_code=503)
+    async def spa(full_path:str):
+        idx=os.path.join(STATIC_DIR,"index.html")
+        return FileResponse(idx) if os.path.isfile(idx) else JSONResponse({"error":"Frontend not built"},status_code=503)
 else:
     @app.get("/")
-    async def root():
-        return {"message": "🍿 PopCorn API v2 running"}
+    async def root(): return {"message":"🍿 PopCorn API v3 running"}
 
-
-def _j(obj: dict, fields: list[str]):
+def _j(obj:dict,fields:list):
     for f in fields:
-        if isinstance(obj.get(f), str):
-            try: obj[f] = json.loads(obj[f])
-            except Exception: obj[f] = []
+        if isinstance(obj.get(f),str):
+            try: obj[f]=json.loads(obj[f])
+            except: obj[f]=[]
