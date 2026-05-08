@@ -15,7 +15,7 @@ export default function SeriesDetail({ id, navigate, goBack }: Props) {
 
   useEffect(() => {
     setLoading(true); setError(""); setPlayEp(null); setExpanded(false);
-    api.series_detail(id)
+    api.seriesDetail(id)
       .then(s => { setSeries(s); setLoading(false); })
       .catch(() => { setError("تعذّر تحميل المسلسل"); setLoading(false); });
   }, [id]);
@@ -95,9 +95,9 @@ export default function SeriesDetail({ id, navigate, goBack }: Props) {
                 </span>
               )}
               {year && <span style={{ fontSize: 11, color: "rgba(255,255,255,0.4)", display: "flex", alignItems: "center", gap: 3 }}><Calendar size={10} />{year}</span>}
-              {series.number_of_seasons > 0 && (
+              {series.total_seasons > 0 && (
                 <span style={{ fontSize: 11, color: "rgba(255,255,255,0.4)", display: "flex", alignItems: "center", gap: 3 }}>
-                  <Tv2 size={10} />{series.number_of_seasons} مواسم
+                  <Tv2 size={10} />{series.total_seasons} مواسم
                 </span>
               )}
             </div>
@@ -220,10 +220,10 @@ export default function SeriesDetail({ id, navigate, goBack }: Props) {
               <span style={{ fontSize: 13 }}>{series.first_air_date}</span>
             </div>
           )}
-          {series.number_of_seasons > 0 && (
+          {series.total_seasons > 0 && (
             <div style={{ display: "flex", justifyContent: "space-between" }}>
               <span style={{ fontSize: 12, color: "rgba(255,255,255,0.45)" }}>المواسم</span>
-              <span style={{ fontSize: 13 }}>{series.number_of_seasons}</span>
+              <span style={{ fontSize: 13 }}>{series.total_seasons}</span>
             </div>
           )}
           {(series as any).status && (
