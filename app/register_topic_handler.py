@@ -4,7 +4,8 @@ Delegates to sync_bot.register_topic().
 """
 from telegram import Update
 from telegram.ext import ContextTypes
-from app.sync_bot import register_topic, parse_topic_name, _map_topic_to_series
+from app.sync_bot import register_topic, parse_topic_name
+from app.database import set_topic_series_map
 import logging
 
 logger = logging.getLogger(__name__)
@@ -20,7 +21,7 @@ async def handle_new_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ok = await register_topic(topic_name, topic_id)
     parsed = parse_topic_name(topic_name)
     if parsed and parsed["type"] == "series":
-        _map_topic_to_series(topic_id, parsed["internal_id"])
+        set_topic_series_map(topic_id, parsed["internal_id"])
     if ok:
         logger.info(f"✅ Auto-registered: {topic_name}")
 
@@ -35,4 +36,4 @@ async def handle_edited_topic(update: Update, context: ContextTypes.DEFAULT_TYPE
     ok = await register_topic(topic_name, topic_id)
     parsed = parse_topic_name(topic_name)
     if parsed and parsed["type"] == "series":
-        _map_topic_to_series(topic_id, parsed["internal_id"])
+        set_topic_series_map(topic_id, parsed["internal_id"])
