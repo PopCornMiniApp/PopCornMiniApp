@@ -261,17 +261,16 @@ async def admin_bulk(payload: dict):
 
 @app.post("/api/admin/scan_file_ids")
 async def admin_scan_file_ids():
-    """Use the running Pyrogram client to fetch file_ids for all known historical messages."""
-    from app.stream import _pyro_clients
-    from app.config import PRIVATE_GROUP_ID as GROUP_ID, DB_PATH
+    """Use Bot API forward_message to extract file_ids from all known historical messages.
+    forward_message returns a full Message object including video.file_id.
+    """
+    from telegram import Bot
+    from app.config import MAIN_BOT_TOKEN, ADMIN_ID, PRIVATE_GROUP_ID, DB_PATH
     import sqlite3 as sq
+    import asyncio as aio
 
-    if not _pyro_clients:
-        raise HTTPException(503, "Pyrogram not ready")
+    GROUP_ID = PRIVATE_GROUP_ID or -1003826837517
 
-    client = _pyro_clients[0]
-
-    # Known message IDs from the original group scan
     MOVIE_MSGS: dict[str, int] = {
         'mid00001': 4713, 'mid00002': 4715, 'mid00003': 4717,
         'mid00004': 4719, 'mid00005': 4721, 'mid00006': 4723,
@@ -283,7 +282,6 @@ async def admin_scan_file_ids():
         'mid00022': 4852,
     }
 
-    # (series_id, season, ep_num) -> message_id
     EPISODE_MSGS: dict[tuple, int] = {}
     for msg_id, ep_num, season, series_id in [
         (4660,1,1,'sid00001'),(4661,2,1,'sid00001'),(4662,3,1,'sid00001'),(4663,4,1,'sid00001'),(4664,5,1,'sid00001'),
@@ -308,25 +306,44 @@ async def admin_scan_file_ids():
     ]:
         EPISODE_MSGS[(series_id, season, ep_num)] = msg_id
 
-    all_ids = list(MOVIE_MSGS.values()) + list(EPISODE_MSGS.values())
-    logger.info(f"Scanning {len(all_ids)} messages for file_ids...")
+    bot = Bot(token=MAIN_BOT_TOKEN)
+    # Use ADMIN_ID as dump destination — forward returns full Message with file_id
+    DUMP_CHAT = ADMIN_ID if ADMIN_ID else GROUP_ID
 
     msg_data: dict[int, dict] = {}
-    try:
-        for i in range(0, len(all_ids), 100):
-            chunk = all_ids[i:i + 100]
-            msgs = await client.get_messages(GROUP_ID, chunk)
-            for m in (msgs if isinstance(msgs, list) else [msgs]):
-                if m and m.id and (m.video or m.document):
-                    media = m.video or m.document
-                    msg_data[m.id] = {
-                        "file_id": media.file_id,
-                        "file_size": getattr(media, "file_size", 0),
-                        "duration": getattr(media, "duration", 0),
-                    }
-    except Exception as e:
-        logger.error(f"scan_file_ids error: {e}")
-        raise HTTPException(500, f"Pyrogram get_messages failed: {e}")
+
+    async def forward_one(msg_id: int):
+        try:
+            m = await bot.forward_message(
+                chat_id=DUMP_CHAT,
+                from_chat_id=GROUP_ID,
+                message_id=msg_id,
+                protect_content=False,
+            )
+            media = m.video or m.document or m.audio
+            if media:
+                msg_data[msg_id] = {
+                    "file_id": media.file_id,
+                    "file_size": getattr(media, "file_size", 0) or 0,
+                    "duration": getattr(media, "duration", 0) or 0,
+                }
+                logger.info(f"Got file_id for msg {msg_id}: {media.file_id[:20]}...")
+        except Exception as e:
+            logger.warning(f"forward msg {msg_id} failed: {e}")
+
+    all_movie_ids  = list(MOVIE_MSGS.values())
+    all_episode_ids = list(EPISODE_MSGS.values())
+
+    # Forward movies in chunks (respect rate limit)
+    for i in range(0, len(all_movie_ids), 5):
+        chunk = all_movie_ids[i:i+5]
+        await aio.gather(*[forward_one(mid) for mid in chunk])
+        await aio.sleep(0.5)
+
+    for i in range(0, len(all_episode_ids), 5):
+        chunk = all_episode_ids[i:i+5]
+        await aio.gather(*[forward_one(mid) for mid in chunk])
+        await aio.sleep(0.5)
 
     conn = sq.connect(DB_PATH)
     movies_updated = episodes_updated = 0
