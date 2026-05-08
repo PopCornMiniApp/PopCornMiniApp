@@ -455,23 +455,37 @@ async def debug_dialogs():
 
 @app.get("/api/debug/forum-topics")
 async def debug_forum_topics():
-    """Test get_forum_topics on the private group."""
+    """Test raw MTProto GetForumTopics on the private group."""
     from app.stream import _pyro_clients
     from app.config import PRIVATE_GROUP_ID
+    from app.scanner import _get_forum_topics_raw
     results = []
-    for i, pyro in enumerate(_pyro_clients):
-        info: dict = {"client": i, "topics": [], "error": None, "count": 0}
+    for i, pyro in enumerate(_pyro_clients[:1]):  # Only test client 0
+        info: dict = {"client": i, "topics": [], "error": None, "count": 0,
+                      "peer_resolved": False, "peer_error": None,
+                      "history_test": None, "history_error": None}
+        # Test 1: resolve_peer
         try:
-            count = 0
-            async for topic in pyro.get_forum_topics(PRIVATE_GROUP_ID):
-                count += 1
-                if count <= 5:
-                    info["topics"].append({"id": topic.id, "title": topic.title})
-                if count >= 50:
-                    break
-            info["count"] = count
+            peer = await asyncio.wait_for(pyro.resolve_peer(PRIVATE_GROUP_ID), timeout=15)
+            info["peer_resolved"] = True
+            info["peer_info"] = {"channel_id": getattr(peer,"channel_id",None), "access_hash": bool(getattr(peer,"access_hash",None))}
+        except Exception as e:
+            info["peer_error"] = f"{type(e).__name__}: {e}"
+        # Test 2: raw GetForumTopics
+        try:
+            topics = await _get_forum_topics_raw(pyro)
+            info["count"] = len(topics)
+            info["topics"] = [{"id": t.id, "title": t.title} for t in topics[:5]]
         except Exception as e:
             info["error"] = f"{type(e).__name__}: {e}"
+        # Test 3: get_chat_history (limit=2)
+        try:
+            msgs = []
+            async for m in pyro.get_chat_history(PRIVATE_GROUP_ID, limit=2):
+                msgs.append({"id": m.id, "type": str(type(m.media).__name__ if m.media else "text")})
+            info["history_test"] = msgs
+        except Exception as e:
+            info["history_error"] = f"{type(e).__name__}: {e}"
         results.append(info)
     return {"private_group_id": PRIVATE_GROUP_ID, "clients": results}
 
