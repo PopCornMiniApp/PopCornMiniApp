@@ -259,6 +259,47 @@ async def admin_bulk(payload: dict):
     return {"results": results}
 
 
+@app.post("/api/admin/bulk_update_fileids")
+async def admin_bulk_update_fileids(payload: dict):
+    """Directly set file_ids for movies and episodes from external collection."""
+    from app.config import DB_PATH
+    import sqlite3 as sq
+
+    movies   = payload.get("movies", {})    # {movie_id: {file_id, file_size, duration, message_id}}
+    episodes = payload.get("episodes", {})  # {"sid_season_ep": {series_id, season, ep, file_id, ...}}
+
+    conn = sq.connect(DB_PATH)
+    movies_updated = episodes_updated = 0
+    try:
+        for movie_id, d in movies.items():
+            conn.execute(
+                "UPDATE movies SET file_id=?, file_size=?, duration=?, message_id=?, updated_at=datetime('now') WHERE id=?",
+                (d["file_id"], d.get("file_size", 0), d.get("duration", 0), d.get("message_id", 0), movie_id)
+            )
+            movies_updated += 1
+
+        for key, d in episodes.items():
+            sid    = d["series_id"]
+            season = d["season"]
+            ep     = d["ep"]
+            conn.execute("""
+                INSERT INTO episodes (series_id, season_number, episode_number, file_id, file_size, duration, message_id, topic_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+                ON CONFLICT(series_id, season_number, episode_number) DO UPDATE SET
+                    file_id=excluded.file_id, file_size=excluded.file_size,
+                    duration=excluded.duration, message_id=excluded.message_id
+            """, (sid, season, ep, d["file_id"], d.get("file_size", 0), d.get("duration", 0), d.get("message_id", 0)))
+            episodes_updated += 1
+
+        conn.commit()
+        logger.info(f"bulk_update_fileids: {movies_updated} movies, {episodes_updated} episodes")
+    finally:
+        conn.close()
+
+    push_db_to_hf()
+    return {"ok": True, "movies_updated": movies_updated, "episodes_updated": episodes_updated}
+
+
 @app.post("/api/admin/scan_file_ids")
 async def admin_scan_file_ids():
     """Use Bot API forward_message to extract file_ids from all known historical messages.
