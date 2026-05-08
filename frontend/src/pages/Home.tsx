@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { api, type FeaturedItem, type Movie, type Series } from "../api";
 import HeroCarousel from "../components/HeroCarousel";
 import ContentCard from "../components/ContentCard";
@@ -13,7 +13,7 @@ function ContentRow({ title, items, type, navigate, onMore }: { title: string; i
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 16px", marginBottom: 12 }}>
         <h2 style={{ fontSize: 16, fontWeight: 700 }}>{title}</h2>
         {onMore && (
-          <button onClick={onMore} style={{ display: "flex", alignItems: "center", gap: 2, color: "#8b5cf6", fontSize: 12 }}>
+          <button onClick={onMore} style={{ display: "flex", alignItems: "center", gap: 2, color: "#f59e0b", fontSize: 12 }}>
             المزيد <ChevronLeft size={14} />
           </button>
         )}
@@ -23,22 +23,23 @@ function ContentRow({ title, items, type, navigate, onMore }: { title: string; i
         scrollbarWidth: "none", WebkitOverflowScrolling: "touch",
       } as any}>
         {items.map((item: any) => (
-          <ContentCard
-            key={item.id}
-            id={item.id}
-            type={(item.type || type) as any}
-            title={item.title}
-            title_ar={item.title_ar}
-            poster_path={item.poster_path}
-            rating={item.rating}
-            has_file={item.has_file ?? (item.file_id != null)}
-            year={item.release_date || item.first_air_date || item.date}
-            onClick={() => {
-              const t = item.type || type;
-              if (t === "series") navigate({ page: "series", id: item.id });
-              else navigate({ page: "movie", id: item.id });
-            }}
-          />
+          <div key={item.id} style={{ flexShrink: 0, width: 120 }}>
+            <ContentCard
+              id={item.id}
+              type={(item.type || type) as any}
+              title={item.title}
+              title_ar={item.title_ar}
+              poster_path={item.poster_path}
+              rating={item.rating}
+              has_file={item.has_file ?? (item.file_id != null)}
+              year={item.release_date || item.first_air_date || item.date}
+              onClick={() => {
+                const t = item.type || type;
+                if (t === "series") navigate({ page: "series", id: item.id });
+                else navigate({ page: "movie", id: item.id });
+              }}
+            />
+          </div>
         ))}
       </div>
     </div>
@@ -82,7 +83,7 @@ export default function Home({ navigate }: Props) {
     return (
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "60vh", gap: 16 }}>
         <div style={{ fontSize: 56 }}>🍿</div>
-        <div style={{ width: 36, height: 36, border: "3px solid rgba(255,255,255,0.1)", borderTopColor: "#8b5cf6", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
+        <div style={{ width: 36, height: 36, border: "3px solid rgba(255,255,255,0.1)", borderTopColor: "#f59e0b", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
         <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
       </div>
     );
@@ -99,7 +100,7 @@ export default function Home({ navigate }: Props) {
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{ fontSize: 22 }}>🍿</span>
-          <span style={{ fontSize: 18, fontWeight: 800, background: "linear-gradient(135deg,#8b5cf6,#06b6d4)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
+          <span style={{ fontSize: 18, fontWeight: 800, background: "linear-gradient(135deg,#f59e0b,#fbbf24)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
             PopCorn
           </span>
         </div>
@@ -120,17 +121,17 @@ export default function Home({ navigate }: Props) {
         <div style={{ display: "flex", gap: 8, overflowX: "auto", padding: "16px 16px 8px", scrollbarWidth: "none" } as any}>
           <button onClick={() => setActiveGenre(null)} style={{
             flexShrink: 0, padding: "6px 16px", borderRadius: 20, fontSize: 12, fontWeight: 600,
-            background: !activeGenre ? "#8b5cf6" : "rgba(255,255,255,0.07)",
-            color: !activeGenre ? "#fff" : "rgba(255,255,255,0.55)",
-            border: !activeGenre ? "1px solid #8b5cf6" : "1px solid rgba(255,255,255,0.1)",
+            background: !activeGenre ? "#f59e0b" : "rgba(255,255,255,0.07)",
+            color: !activeGenre ? "#000" : "rgba(255,255,255,0.55)",
+            border: !activeGenre ? "1px solid #f59e0b" : "1px solid rgba(255,255,255,0.1)",
             transition: "all 0.2s",
           }}>الكل</button>
           {genres.map(g => (
             <button key={g} onClick={() => setActiveGenre(g === activeGenre ? null : g)} style={{
               flexShrink: 0, padding: "6px 16px", borderRadius: 20, fontSize: 12, fontWeight: 600,
-              background: activeGenre === g ? "#8b5cf6" : "rgba(255,255,255,0.07)",
-              color: activeGenre === g ? "#fff" : "rgba(255,255,255,0.55)",
-              border: activeGenre === g ? "1px solid #8b5cf6" : "1px solid rgba(255,255,255,0.1)",
+              background: activeGenre === g ? "#f59e0b" : "rgba(255,255,255,0.07)",
+              color: activeGenre === g ? "#000" : "rgba(255,255,255,0.55)",
+              border: activeGenre === g ? "1px solid #f59e0b" : "1px solid rgba(255,255,255,0.1)",
               transition: "all 0.2s",
             }}>{g}</button>
           ))}

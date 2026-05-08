@@ -9,12 +9,13 @@ export default function ContentCard({ type, title, title_ar, poster_path, rating
   const displayTitle = title_ar || title;
   const yr = year?.slice(0, 4) || "";
   return (
-    <div onClick={onClick} style={{ cursor:"pointer", flexShrink:0, width:130, transition:"transform 0.2s" }}
+    <div onClick={onClick} style={{ cursor:"pointer", width:"100%", transition:"transform 0.2s" }}
       onTouchStart={e=>(e.currentTarget.style.transform="scale(0.95)")}
       onTouchEnd={e=>(e.currentTarget.style.transform="scale(1)")}>
       <div style={{
         position:"relative",borderRadius:10,overflow:"hidden",aspectRatio:"2/3",
         background:"#1a1a2e",boxShadow:"0 4px 16px rgba(0,0,0,0.5)",
+        width:"100%",
       }}>
         {poster_path
           ? <img src={poster_path} alt={displayTitle} style={{width:"100%",height:"100%",objectFit:"cover"}} loading="lazy"/>
@@ -31,8 +32,8 @@ export default function ContentCard({ type, title, title_ar, poster_path, rating
         )}
         <div style={{
           position:"absolute",top:6,left:6,
-          background:type==="series"?"rgba(139,92,246,0.85)":"rgba(16,185,129,0.85)",
-          borderRadius:4,padding:"1px 5px",fontSize:9,fontWeight:700,
+          background:type==="series"?"rgba(245,158,11,0.85)":"rgba(16,185,129,0.85)",
+          borderRadius:4,padding:"1px 5px",fontSize:9,fontWeight:700,color:"#000",
         }}>{type==="series"?"مسلسل":"فيلم"}</div>
         {has_file === false && (
           <div style={{position:"absolute",inset:0,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"flex-end",justifyContent:"center",paddingBottom:8}}>

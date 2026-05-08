@@ -11,6 +11,7 @@ export interface Series {
   first_air_date:string;genres:string[];cast:any[];creator:string;
   rating:number;vote_count:number;total_seasons:number;status:string;
   seasons?:Record<string,Episode[]>;total_seasons_available?:number;
+  has_file?:boolean;
 }
 export interface Episode {
   id:number;series_id:string;season_number:number;episode_number:number;

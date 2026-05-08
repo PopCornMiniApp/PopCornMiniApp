@@ -49,7 +49,7 @@ export default function HeroCarousel({ items, navigate }: Props) {
         {item.genres?.length > 0 && (
           <div style={{display:"flex",gap:6,marginBottom:8,flexWrap:"wrap"}}>
             {item.genres.slice(0,3).map((g:string)=>(
-              <span key={g} style={{fontSize:10,padding:"2px 8px",borderRadius:20,background:"rgba(139,92,246,0.35)",border:"1px solid rgba(139,92,246,0.5)",color:"#c4b5fd"}}>{g}</span>
+              <span key={g} style={{fontSize:10,padding:"2px 8px",borderRadius:20,background:"rgba(245,158,11,0.25)",border:"1px solid rgba(245,158,11,0.5)",color:"#fde68a"}}>{g}</span>
             ))}
           </div>
         )}
@@ -57,12 +57,12 @@ export default function HeroCarousel({ items, navigate }: Props) {
         <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
           {item.rating>0 && <span style={{display:"flex",alignItems:"center",gap:3,color:"#f59e0b",fontSize:12,fontWeight:700}}><Star size={11} fill="#f59e0b"/>{item.rating.toFixed(1)}</span>}
           {item.date && <span style={{fontSize:11,color:"rgba(255,255,255,0.5)"}}>{item.date.slice(0,4)}</span>}
-          <span style={{fontSize:10,padding:"2px 6px",borderRadius:4,background:item.type==="series"?"rgba(139,92,246,0.7)":"rgba(16,185,129,0.7)"}}>{item.type==="series"?"مسلسل":"فيلم"}</span>
+          <span style={{fontSize:10,padding:"2px 6px",borderRadius:4,background:item.type==="series"?"rgba(245,158,11,0.7)":"rgba(16,185,129,0.7)",color:item.type==="series"?"#000":"#fff"}}>{item.type==="series"?"مسلسل":"فيلم"}</span>
         </div>
         <button
           onClick={() => item.type==="movie" ? navigate({page:"movie",id:item.id}) : navigate({page:"series",id:item.id})}
-          style={{display:"flex",alignItems:"center",gap:6,background:"#8b5cf6",color:"#fff",padding:"10px 22px",borderRadius:24,fontWeight:700,fontSize:13,boxShadow:"0 4px 20px rgba(139,92,246,0.5)"}}
-        ><Play size={15} fill="#fff"/> مشاهدة الآن</button>
+          style={{display:"flex",alignItems:"center",gap:6,background:"#f59e0b",color:"#000",padding:"10px 22px",borderRadius:24,fontWeight:700,fontSize:13,boxShadow:"0 4px 20px rgba(245,158,11,0.5)"}}
+        ><Play size={15} fill="#000"/> مشاهدة الآن</button>
       </div>
 
       <button onClick={()=>{prev();resetTimer();}} style={{position:"absolute",right:10,top:"38%",zIndex:20,background:"rgba(0,0,0,0.45)",borderRadius:"50%",padding:7,backdropFilter:"blur(4px)"}}><ChevronRight size={16}/></button>
@@ -72,7 +72,7 @@ export default function HeroCarousel({ items, navigate }: Props) {
         {items.map((_,i)=>(
           <button key={i} onClick={()=>{goTo(i);resetTimer();}} style={{
             width:i===current?20:6,height:6,borderRadius:3,padding:0,
-            background:i===current?"#8b5cf6":"rgba(255,255,255,0.28)",transition:"width 0.35s,background 0.35s",
+            background:i===current?"#f59e0b":"rgba(255,255,255,0.28)",transition:"width 0.35s,background 0.35s",
           }}/>
         ))}
       </div>

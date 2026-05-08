@@ -19,6 +19,7 @@ from app.config import MAIN_BOT_TOKEN, PRIVATE_GROUP_ID, ADMIN_ID, DB_PATH
 from app import database as db
 from app.tmdb import fetch_movie, fetch_series, fetch_episode_info
 from app.database import push_db_to_hf
+from app.cache import cache_clear_all
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +72,8 @@ async def register_topic(topic_name: str, topic_id: int) -> bool:
         logger.info(f"✅ Series registered: {tmdb_data['title']}")
 
     push_db_to_hf()
+    # Clear all in-memory cache so new content appears immediately in API
+    cache_clear_all()
     return True
 
 
@@ -80,6 +83,21 @@ def _find_movie_by_topic(topic_id: int) -> dict | None:
     try:
         row = conn.execute("SELECT * FROM movies WHERE topic_id=?", (topic_id,)).fetchone()
         return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def _map_topic_to_series(topic_id: int) -> str | None:
+    """Return series_id for a topic_id from topic_series_map table (if exists)."""
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        try:
+            row = conn.execute(
+                "SELECT series_id FROM topic_series_map WHERE topic_id=?", (topic_id,)
+            ).fetchone()
+            return row[0] if row else None
+        except sqlite3.OperationalError:
+            return None
     finally:
         conn.close()
 
@@ -95,197 +113,100 @@ def _find_series_by_topic(topic_id: int) -> dict | None:
         ).fetchone()
         if row:
             return dict(row)
-        # Fallback: look up by topic_id in a temporary mapping
-        row2 = conn.execute(
-            "SELECT * FROM series WHERE id IN "
-            "(SELECT series_id FROM topic_series_map WHERE topic_id=?) LIMIT 1", (topic_id,)
-        ).fetchone()
-        return dict(row2) if row2 else None
-    except Exception:
+        # Fallback: topic_series_map
+        sid = _map_topic_to_series(topic_id)
+        if sid:
+            row2 = conn.execute("SELECT * FROM series WHERE id=?", (sid,)).fetchone()
+            return dict(row2) if row2 else None
         return None
     finally:
         conn.close()
 
 
-def _map_topic_to_series(topic_id: int, series_id: str):
-    """Store topic→series mapping so episode uploads can find their series."""
-    conn = sqlite3.connect(DB_PATH)
-    try:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS topic_series_map (
-                topic_id INTEGER PRIMARY KEY,
-                series_id TEXT NOT NULL
-            )
-        """)
-        conn.execute(
-            "INSERT OR REPLACE INTO topic_series_map(topic_id, series_id) VALUES(?,?)",
-            (topic_id, series_id)
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def _get_series_for_topic(topic_id: int) -> str | None:
-    conn = sqlite3.connect(DB_PATH)
-    try:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS topic_series_map (
-                topic_id INTEGER PRIMARY KEY, series_id TEXT NOT NULL
-            )
-        """)
-        row = conn.execute(
-            "SELECT series_id FROM topic_series_map WHERE topic_id=?", (topic_id,)
-        ).fetchone()
-        return row[0] if row else None
-    finally:
-        conn.close()
-
-
-async def handle_group_message(update: Update, context):
+async def handle_file_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle video/document messages in the private group topics."""
     msg = update.effective_message
-    if not msg or msg.chat_id != PRIVATE_GROUP_ID:
+    if not msg:
         return
 
-    thread_id = msg.message_thread_id
+    # Only care about messages from the private group
+    chat_id = msg.chat_id if msg.chat_id else (msg.chat.id if msg.chat else None)
+    if chat_id != PRIVATE_GROUP_ID:
+        return
 
-    # ── New / renamed topic ──────────────────────────────────────────────────
-    for ev in ["forum_topic_created", "forum_topic_edited"]:
-        event = getattr(msg, ev, None)
-        if event:
-            topic_name = event.name
-            logger.info(f"Topic event '{ev}': {topic_name} (id={thread_id})")
-            ok = await register_topic(topic_name, thread_id)
+    # Must have a caption with hashtags
+    caption = msg.caption or ""
+    if not caption.strip():
+        return
 
-            # Store series<→topic mapping
-            parsed = parse_topic_name(topic_name)
-            if parsed and parsed["type"] == "series":
-                _map_topic_to_series(thread_id, parsed["internal_id"])
-            if ok:
-                await msg.reply_text(f"✅ تم تسجيل: {topic_name[:50]}", message_thread_id=thread_id)
+    # Extract file info
+    file_obj = msg.video or msg.document
+    if not file_obj:
+        return
+
+    file_id = file_obj.file_id
+    file_size = getattr(file_obj, "file_size", None) or 0
+    duration = getattr(file_obj, "duration", None) or 0
+    message_id = msg.message_id
+    topic_id = getattr(msg, "message_thread_id", None) or 0
+
+    # ── Movie file ──────────────────────────────────────────────────────────
+    if MOVIE_CAP_RE.search(caption):
+        movie = _find_movie_by_topic(topic_id)
+        if movie:
+            db.update_movie_file(movie["id"], file_id, file_size, duration, message_id)
+            push_db_to_hf()
+            cache_clear_all()
+            logger.info(f"✅ Movie file saved: {movie['title']} — file_id={file_id[:20]}...")
+        else:
+            logger.warning(f"No movie found for topic_id={topic_id}")
+        return
+
+    # ── Episode file ────────────────────────────────────────────────────────
+    ep_match = EPISODE_CAP_RE.search(caption)
+    if ep_match:
+        season_num  = int(ep_match.group(1))
+        episode_num = int(ep_match.group(2))
+
+        series = _find_series_by_topic(topic_id)
+        if not series:
+            logger.warning(f"No series found for topic_id={topic_id}")
             return
 
-    # ── Video / Document file ────────────────────────────────────────────────
-    video = msg.video or (
-        msg.document if msg.document and msg.document.mime_type
-        and 'video' in msg.document.mime_type else None
-    )
-    if not video or not thread_id:
-        return
+        # Ensure episode row exists (upsert metadata from TMDB if needed)
+        existing_ep = db.get_episode(series["id"], season_num, episode_num)
+        if not existing_ep:
+            ep_meta = await fetch_episode_info(series.get("tmdb_id"), season_num, episode_num)
+            db.upsert_episode({
+                "series_id": series["id"],
+                "season_number": season_num,
+                "episode_number": episode_num,
+                "title": ep_meta.get("title", f"الحلقة {episode_num}") if ep_meta else f"الحلقة {episode_num}",
+                "overview": ep_meta.get("overview", "") if ep_meta else "",
+                "still_path": ep_meta.get("still_path", "") if ep_meta else "",
+                "air_date": ep_meta.get("air_date", "") if ep_meta else "",
+                "runtime": ep_meta.get("runtime", 0) if ep_meta else 0,
+                "topic_id": topic_id,
+            })
 
-    caption = (msg.caption or msg.text or "").strip()
-    ep_m  = EPISODE_CAP_RE.search(caption)
-    mov_m = MOVIE_CAP_RE.search(caption)
-
-    if ep_m:
-        season, ep_num = int(ep_m.group(1)), int(ep_m.group(2))
-        await _save_episode(video, thread_id, msg.message_id, season, ep_num)
-    elif mov_m:
-        await _save_movie_file(video, thread_id, msg.message_id)
-    else:
-        logger.debug(f"Unrecognised caption: '{caption}' in topic {thread_id}")
-
-
-async def _save_movie_file(video, topic_id: int, message_id: int):
-    movie = _find_movie_by_topic(topic_id)
-    if not movie:
-        logger.warning(f"No movie for topic {topic_id}")
-        return
-    db.upsert_movie({
-        **movie,
-        "file_id":   video.file_id,
-        "file_size": getattr(video, "file_size", 0),
-        "duration":  getattr(video, "duration", 0),
-        "topic_id":  topic_id,
-        "message_id": message_id,
-    })
-    push_db_to_hf()
-    logger.info(f"✅ Movie file saved: {movie.get('title')}")
-
-
-async def _save_episode(video, topic_id: int, message_id: int, season: int, ep_num: int):
-    series_id = _get_series_for_topic(topic_id)
-    if not series_id:
-        logger.warning(f"No series mapped to topic {topic_id}")
-        return
-    series = db.get_series(series_id=series_id)
-    if not series:
-        logger.warning(f"Series {series_id} not in DB")
-        return
-
-    duration = getattr(video, "duration", 0)
-    ep_info = await fetch_episode_info(series["tmdb_id"], season, ep_num) or {}
-    db.upsert_episode({
-        "series_id":      series_id,
-        "season_number":  season,
-        "episode_number": ep_num,
-        "title":     ep_info.get("title", f"Episode {ep_num}"),
-        "overview":  ep_info.get("overview", ""),
-        "still_path": ep_info.get("still_path", ""),
-        "air_date":  ep_info.get("air_date", ""),
-        "runtime":   ep_info.get("runtime") or (duration // 60 if duration else 0),
-        "file_id":       video.file_id,
-        "file_unique_id": getattr(video, "file_unique_id", ""),
-        "file_size":     getattr(video, "file_size", 0),
-        "duration":      duration,
-        "topic_id":      topic_id,
-        "message_id":    message_id,
-    })
-    push_db_to_hf()
-    logger.info(f"✅ Episode saved: {series.get('title')} S{season}E{ep_num}")
-
-
-async def handle_admin_cmd(update: Update, context):
-    msg = update.effective_message
-    if not msg or msg.from_user.id != ADMIN_ID:
-        return
-    text = (msg.text or "").strip()
-
-    if text.startswith("/stats"):
-        s = db.get_stats()
-        await msg.reply_text(
-            f"📊 *PopCorn Stats*\n\n🎬 أفلام: {s['movies_count']}\n"
-            f"📺 مسلسلات: {s['series_count']}\n🎞 حلقات: {s['episodes_count']}",
-            parse_mode="Markdown"
-        )
-
-    elif text.startswith("/register"):
-        parts = text.split()
-        if len(parts) >= 3:
-            topic_id   = int(parts[-1])
-            topic_name = " ".join(parts[1:-1])
-            ok = await register_topic(topic_name, topic_id)
-            parsed = parse_topic_name(topic_name)
-            if parsed and parsed["type"] == "series":
-                _map_topic_to_series(topic_id, parsed["internal_id"])
-            await msg.reply_text("✅ تم التسجيل!" if ok else "❌ فشل التسجيل")
-
-    elif text.startswith("/sync_db"):
+        db.update_episode_file(series["id"], season_num, episode_num,
+                               file_id, file_size, duration, message_id, topic_id)
         push_db_to_hf()
-        await msg.reply_text("✅ تمت المزامنة مع HuggingFace!")
+        cache_clear_all()
+        logger.info(
+            f"✅ Episode saved: {series['title']} S{season_num:02d}E{episode_num:02d} — file_id={file_id[:20]}..."
+        )
+        return
 
-    elif text.startswith("/list"):
-        s = db.get_stats()
-        movies = "\n".join(f"  🎬 {m['title']}" for m in s['latest_movies'])
-        series = "\n".join(f"  📺 {s2['title']}" for s2 in s['latest_series'])
-        await msg.reply_text(f"*أحدث الأفلام:*\n{movies}\n\n*أحدث المسلسلات:*\n{series}", parse_mode="Markdown")
+    logger.debug(f"Message in topic {topic_id} has no recognised caption pattern: {caption[:80]}")
 
 
 def build_sync_app() -> Application:
-    from app.register_topic_handler import handle_new_topic, handle_edited_topic
-
-    application = Application.builder().token(MAIN_BOT_TOKEN).build()
-
-    # Group messages
-    application.add_handler(MessageHandler(
-        filters.Chat(PRIVATE_GROUP_ID), handle_group_message
-    ))
-
-    # Admin commands (private)
-    application.add_handler(CommandHandler(
-        ["stats", "register", "sync_db", "list"],
-        handle_admin_cmd,
-        filters=filters.User(ADMIN_ID)
-    ))
-
-    return application
+    app = Application.builder().token(MAIN_BOT_TOKEN).build()
+    app.add_handler(
+        MessageHandler(
+            filters.Chat(chat_id=PRIVATE_GROUP_ID) & (filters.VIDEO | filters.Document.VIDEO),
+            handle_file_message,
+        )
+    )
+    return app
