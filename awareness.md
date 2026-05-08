@@ -1,6 +1,6 @@
 # PopCorn 🍿 — Project Awareness Document
 
-> آخر تحديث: 2026-05-08
+> آخر تحديث: 2026-05-08 (v3.3)
 
 ## نظرة عامة على المشروع
 
@@ -14,8 +14,8 @@ PopCorn هو تطبيق مصغر داخل تيليجرام (Telegram Mini App) �
 [مستخدم تيليجرام]
        │
        ▼
-[البوت الرئيسي (MAIN_BOT)]  ← يعمل فقط كـ حامل للتطبيق المصغر
-       │  يفتح Mini App فقط — لا يرسل أي وسائط
+[البوت الرئيسي (MAIN_BOT)]  ← يعمل كـ حامل للتطبيق المصغر + مزامنة المجموعة
+       │  يفتح Mini App — لا يرسل أي وسائط
        ▼
 [HuggingFace Space: toolkit-backend-popcorn.hf.space]
        │
@@ -45,22 +45,15 @@ PopCorn هو تطبيق مصغر داخل تيليجرام (Telegram Mini App) �
   ├── Topic جديد → register_topic() → TMDB → upsert_movie/series
   └── ملف فيديو → file_id محفوظ في DB (لا إعادة إرسال)
 
+[scanner.py] يمسح كل المواضيع والرسائل:
+  ├── يُشغَّل يدوياً بأمر /admin → زر "مزامنة المجموعة الآن"
+  └── يُشغَّل تلقائياً كل ساعتين (_periodic_autoscan)
+
 [HuggingFace Dataset: ToolKit-backend/PopCornDB]
   └── popcorn.db ← يُحمَّل تلقائيًا كل 10 دقائق + عند كل تغيير
 
 [Pyrogram MTProto clients]
   └── stream_bot_1 + stream_bot_2 ← تدفق الفيديو مباشرة من تيليجرام
-```
-
-## مسار المستخدم داخل التطبيق
-
-```
-1. المستخدم يفتح البوت → يضغط "فتح PopCorn" → يفتح Mini App
-2. الصفحة الرئيسية: أفلام مميزة + آخر الإضافات
-3. المستخدم يختار فيلم/مسلسل → صفحة التفاصيل (TMDB: ملصق، قصة، تقييم، ممثلون)
-4. يضغط "مشاهدة" → مشغل الفيديو المدمج في التطبيق
-5. المشغل يطلب: GET /api/stream/{file_id}
-6. Backend يبث الفيديو عبر Pyrogram (MTProto) مع دعم Range requests للتخطي
 ```
 
 ---
@@ -71,12 +64,33 @@ PopCorn هو تطبيق مصغر داخل تيليجرام (Telegram Mini App) �
 - `movies`: id, tmdb_id, title, title_ar, poster_path, backdrop_path, rating, file_id, file_size, duration, topic_id, message_id
 - `series`: id, tmdb_id, title, title_ar, poster_path, backdrop_path, rating, total_seasons, status
 - `episodes`: series_id, season_number, episode_number, file_id, file_size, duration, topic_id, message_id
-- `topic_series_map`: topic_id → series_id (ربط مواضيع المجموعة بالمسلسلات)
+- `topic_series_map`: topic_id → series_id (ربط مواضيع المجموعة بالمسلسلات) ← جدول حيوي جديد
 
-**الإحصائيات الحالية (2026-05-08):**
-- أفلام: 22
-- مسلسلات: 3 (Stranger Things, See, روايته وروايتها)
-- حلقات: 78
+---
+
+## الإصلاحات (v3.3 — 2026-05-08)
+
+### ✅ إصلاح 1: دوال قاعدة البيانات المفقودة (السبب الجذري لعدم المزامنة)
+**المشكلة:** `scanner.py` و`sync_bot.py` يستدعيان `db.update_movie_file`, `db.get_episode`, `db.update_episode_file` لكنها غير موجودة في `database.py` — مما يسبب AttributeError ويوقف المزامنة تماماً.
+**الحل:** أضفنا الدوال الثلاث المفقودة وجدول `topic_series_map` لقاعدة البيانات.
+
+### ✅ إصلاح 2: البوت لا يرد على الأوامر
+**المشكلة:** البوت لا يحذف الـ webhook قبل بدء الـ polling، وكان `drop_pending_updates=False`.
+**الحل:** أضفنا `bot.delete_webhook(drop_pending_updates=True)` قبل بدء الـ polling وغيّرنا إلى `drop_pending_updates=True`.
+
+### ✅ إصلاح 3: عدم تحديث قاعدة البيانات من المجموعة تلقائياً
+**المشكلة:** `_periodic_sync` كان يرفع DB فقط ولا يمسح المجموعة للمحتوى الجديد.
+**الحل:** أضفنا `_periodic_autoscan()` يعمل كل ساعتين ويشغّل `run_full_scan()` تلقائياً.
+
+### ✅ إصلاح 4: توقيع `_map_topic_to_series` خاطئ
+**المشكلة:** في `register_topic_handler.py` تُستدعى بمعاملين لكنها معرّفة بمعامل واحد.
+**الحل:** استبدلناها بـ `set_topic_series_map(topic_id, series_id)` من `database.py`.
+
+### ✅ إصلاح 5: أزرار البوت وتنظيم الكيبورد
+**الحل:** أعدنا ترتيب أزرار inline keyboard بحيث كل صف منفصل لتجنب التداخل مع أزرار تيليجرام الأصلية.
+
+### ✅ إصلاح 6: المسح الكامل يصل 3000 رسالة بدلاً من 2000
+**الحل:** رفعنا حد `get_chat_history` من 2000 إلى 3000 لضمان التقاط كل المحتوى.
 
 ---
 
@@ -84,7 +98,7 @@ PopCorn هو تطبيق مصغر داخل تيليجرام (Telegram Mini App) �
 
 | المتغير | الوصف |
 |---|---|
-| `MAIN_BOT_TOKEN` | البوت الرئيسي — حامل التطبيق فقط |
+| `MAIN_BOT_TOKEN` | البوت الرئيسي — حامل التطبيق + مزامنة المجموعة |
 | `STREAM_BOT_1`, `STREAM_BOT_2` | بوتات البث عبر Pyrogram |
 | `SESSION_1_API_ID`, `SESSION_1_API_HASH` | بيانات MTProto للبث |
 | `SESSION_2_API_ID`, `SESSION_2_API_HASH` | بيانات MTProto احتياطية |
@@ -97,43 +111,17 @@ PopCorn هو تطبيق مصغر داخل تيليجرام (Telegram Mini App) �
 
 ---
 
-## المشاكل التي تم حلها (2026-05-08)
-
-### ✅ الإصلاح 1: البوت يرسل فيديوهات للخاص
-**المشكلة:** `scan_file_ids` كان يستخدم `bot.forward_message(chat_id=ADMIN_ID)` لاستخراج file_ids، مما يتسبب في إرسال كل الفيديوهات للمشرف في الخاص.
-
-**الحل:** استبدلنا `forward_message()` بـ `pyro.get_messages(GROUP_ID, msg_id)` — Pyrogram يقرأ الرسائل مباشرة من المجموعة عبر MTProto دون إرسال أي شيء لأي مكان.
-
-### ✅ الإصلاح 2: الفرونت يعرض JSON خطأ
-**المشكلة:** `@app.get("/{full_path:path}")` مع `async def spa(_: str)` — FastAPI يفسر `_` كـ query parameter مطلوب وليس path parameter، مما يسبب خطأ `Field required`.
-
-**الحل:** تغيير التوقيع إلى `async def spa(full_path: str)` ليطابق اسم متغير المسار.
-
-### ✅ الإصلاح 3: خطأ إملائي في رابط Mini App
-**المشكلة:** `MINI_APP_URL = "https://toolki-backend-popcorn.hf.space"` (toolki بدلاً من toolkit)
-
-**الحل:** تصحيح الرابط إلى `"https://toolkit-backend-popcorn.hf.space"`
-
----
-
-## البوت الرئيسي — قاعدة ذهبية
-
-> **البوت الرئيسي لا يرسل أي وسائط (فيديو/صور/ملفات) أبداً.**
-> دوره الوحيد: إرسال زر "فتح PopCorn" الذي يفتح Mini App.
-> كل المحتوى يُشاهَد داخل التطبيق المصغر عبر المشغل المدمج.
-> البوتات المسؤولة عن البث هي STREAM_BOT_1 و STREAM_BOT_2 فقط عبر Pyrogram.
-
----
-
 ## ملفات المشروع الرئيسية
 
 | الملف | الوظيفة |
 |---|---|
-| `app/main.py` | FastAPI app — API routes + static file serving |
-| `app/bot_commands.py` | أوامر البوت الرئيسي (start, app, admin) |
+| `app/main.py` | FastAPI app — API routes + bot startup + periodic tasks |
+| `app/bot_commands.py` | أوامر البوت الرئيسي (start, app, admin, fullscan) |
 | `app/sync_bot.py` | مزامنة المجموعة الخاصة — يحفظ file_ids في DB |
-| `app/stream.py` | بث الفيديو عبر Pyrogram MTProto |
+| `app/scanner.py` | فحص كامل للمجموعة — يُشغَّل يدوياً وتلقائياً كل ساعتين |
 | `app/database.py` | SQLite + مزامنة HuggingFace Dataset |
+| `app/register_topic_handler.py` | معالج أحداث إنشاء/تعديل المواضيع |
+| `app/stream.py` | بث الفيديو عبر Pyrogram MTProto |
 | `app/config.py` | إعدادات المشروع من متغيرات البيئة |
 | `app/tmdb.py` | جلب البيانات الوصفية من TMDB |
 | `static/` | الفرونت المبني (React/Vite) |
@@ -141,10 +129,9 @@ PopCorn هو تطبيق مصغر داخل تيليجرام (Telegram Mini App) �
 
 ---
 
-## التطويرات المقترحة
+## قاعدة ذهبية
 
-- [ ] إضافة صفحة "المفضلة" مع حفظ محلي (localStorage)
-- [ ] دعم البحث بالعربية مع تصحيح الإملاء
-- [ ] إضافة نظام تقييم من المستخدمين
-- [ ] دعم الترجمات (subtitle) في المشغل
-- [ ] إضافة مسلسلات وأفلام جديدة بشكل دوري
+> **البوت الرئيسي لا يرسل أي وسائط (فيديو/صور/ملفات) أبداً.**
+> دوره: إرسال زر "فتح PopCorn" + مزامنة المجموعة الخاصة.
+> كل المحتوى يُشاهَد داخل التطبيق المصغر عبر المشغل المدمج.
+> البوتات المسؤولة عن البث هي STREAM_BOT_1 و STREAM_BOT_2 فقط عبر Pyrogram.
