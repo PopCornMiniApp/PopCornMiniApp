@@ -9,24 +9,29 @@ MINI_APP_URL = "https://toolkit-backend-popcorn.hf.space"
 
 
 def _main_kbd():
+    """Main keyboard — one row per button to avoid Telegram layout conflicts."""
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🍿 فتح PopCorn", web_app=WebAppInfo(url=MINI_APP_URL))],
-        [InlineKeyboardButton("🎬 أفلام", web_app=WebAppInfo(url=f"{MINI_APP_URL}/#/movies")),
-         InlineKeyboardButton("📺 مسلسلات", web_app=WebAppInfo(url=f"{MINI_APP_URL}/#/series"))],
+        [
+            InlineKeyboardButton("🎬 أفلام",    web_app=WebAppInfo(url=f"{MINI_APP_URL}/#/movies")),
+            InlineKeyboardButton("📺 مسلسلات", web_app=WebAppInfo(url=f"{MINI_APP_URL}/#/series")),
+        ],
         [InlineKeyboardButton("🔍 بحث", web_app=WebAppInfo(url=f"{MINI_APP_URL}/#/search"))],
     ])
 
 
 def _quick_kbd():
-    return InlineKeyboardMarkup([[InlineKeyboardButton("🍿 فتح التطبيق", web_app=WebAppInfo(url=MINI_APP_URL))]])
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🍿 فتح التطبيق", web_app=WebAppInfo(url=MINI_APP_URL))],
+    ])
 
 
 def _admin_kbd():
-    """Admin control panel keyboard."""
+    """Admin control panel — full-width buttons for clarity."""
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🔄 مزامنة المجموعة الآن", callback_data="admin_fullscan")],
-        [InlineKeyboardButton("📊 الإحصائيات", callback_data="admin_stats_btn")],
-        [InlineKeyboardButton("🆕 آخر الإضافات", callback_data="admin_new_btn")],
+        [InlineKeyboardButton("📊 الإحصائيات",           callback_data="admin_stats_btn")],
+        [InlineKeyboardButton("🆕 آخر الإضافات",         callback_data="admin_new_btn")],
         [InlineKeyboardButton("🍿 فتح التطبيق", web_app=WebAppInfo(url=MINI_APP_URL))],
     ])
 
@@ -44,18 +49,22 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• 🌟 معلومات تفصيلية لكل عمل\n"
         "• 🎭 تصفية حسب التصنيف\n\n"
         "اضغط على الزر أدناه لفتح التطبيق 👇",
-        parse_mode="Markdown", reply_markup=_main_kbd(),
+        parse_mode="Markdown",
+        reply_markup=_main_kbd(),
     )
 
 
 async def cmd_app(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.effective_message.reply_text(
-        "🍿 *PopCorn* — اضغط لفتح التطبيق:", parse_mode="Markdown", reply_markup=_main_kbd(),
+        "🍿 *PopCorn* — اضغط لفتح التطبيق:",
+        parse_mode="Markdown",
+        reply_markup=_main_kbd(),
     )
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.effective_message.reply_text(
+    is_admin = update.effective_user.id == ADMIN_ID
+    text = (
         "📖 *دليل استخدام PopCorn*\n\n"
         "🔸 /start — الشاشة الرئيسية\n"
         "🔸 /app — فتح التطبيق مباشرة\n"
@@ -63,8 +72,12 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🔸 /top — الأعلى تقييماً\n"
         "🔸 /stats — إحصائيات المكتبة\n"
         "🔸 /help — هذه القائمة\n\n"
-        "💡 ابحث عن أي عمل بالعربية أو الإنجليزية داخل التطبيق",
-        parse_mode="Markdown", reply_markup=_quick_kbd(),
+        "💡 ابحث عن أي عمل بالعربية أو الإنجليزية داخل التطبيق"
+    )
+    if is_admin:
+        text += "\n\n👑 *أوامر الإدارة:*\n🔸 /admin — لوحة الإدارة"
+    await update.effective_message.reply_text(
+        text, parse_mode="Markdown", reply_markup=_quick_kbd(),
     )
 
 
@@ -82,7 +95,9 @@ async def cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines.append("\n📺 *مسلسلات:*")
         for s in series:
             lines.append(f"  📺 {s.get('title_ar') or s.get('title', '')}")
-    await update.effective_message.reply_text("\n".join(lines), parse_mode="Markdown", reply_markup=_quick_kbd())
+    await update.effective_message.reply_text(
+        "\n".join(lines), parse_mode="Markdown", reply_markup=_quick_kbd(),
+    )
 
 
 async def cmd_top(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -103,23 +118,31 @@ async def cmd_top(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines.append("\n📺 *مسلسلات:*")
     for s in top_series:
         lines.append(f"  ⭐ {s['rating']} — {s['title_ar'] or s['title']}")
-    await update.effective_message.reply_text("\n".join(lines), parse_mode="Markdown", reply_markup=_quick_kbd())
+    await update.effective_message.reply_text(
+        "\n".join(lines), parse_mode="Markdown", reply_markup=_quick_kbd(),
+    )
 
 
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     s = db.get_stats()
     is_admin = update.effective_user.id == ADMIN_ID
-    text = (f"📊 *إحصائيات PopCorn*\n\n"
-            f"🎬 أفلام: *{s['movies_count']}*\n"
-            f"📺 مسلسلات: *{s['series_count']}*\n"
-            f"🎞 حلقات: *{s['episodes_count']}*")
+    text = (
+        f"📊 *إحصائيات PopCorn*\n\n"
+        f"🎬 أفلام: *{s['movies_count']}*\n"
+        f"📺 مسلسلات: *{s['series_count']}*\n"
+        f"🎞 حلقات: *{s['episodes_count']}*"
+    )
     if is_admin:
         text += f"\n\n👑 *لوحة الإدارة:* /admin"
-    await update.effective_message.reply_text(text, parse_mode="Markdown", reply_markup=_quick_kbd())
+    await update.effective_message.reply_text(
+        text, parse_mode="Markdown", reply_markup=_quick_kbd(),
+    )
 
 
 async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
+    user = update.effective_user
+    if not user or user.id != ADMIN_ID:
+        await update.effective_message.reply_text("⛔ هذا الأمر للمشرف فقط.")
         return
     s = db.get_stats()
     await update.effective_message.reply_text(
@@ -138,21 +161,25 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def callback_admin_fullscan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Inline button handler: trigger full scan of private group."""
     query = update.callback_query
-    if not query or update.effective_user.id != ADMIN_ID:
-        if query:
-            await query.answer("غير مصرح لك!", show_alert=True)
+    if not query:
+        return
+    if update.effective_user.id != ADMIN_ID:
+        await query.answer("⛔ غير مصرح لك!", show_alert=True)
         return
 
-    await query.answer("⏳ جارٍ بدء المسح...")
+    await query.answer("⏳ جارٍ بدء المسح…")
     await query.edit_message_text(
-        "🔍 *جارٍ مسح المجموعة الخاصة...*\n\nيرجى الانتظار، قد يستغرق ذلك بضع دقائق.",
+        "🔍 *جارٍ مسح المجموعة الخاصة…*\n\nيرجى الانتظار، قد يستغرق ذلك بضع دقائق.",
         parse_mode="Markdown",
     )
     try:
         from app.stream import _pyro_clients
         from app.scanner import run_full_scan
         if not _pyro_clients:
-            await query.edit_message_text("❌ لا يوجد عميل Pyrogram متاح. تأكد من تشغيل الخدمة.")
+            await query.edit_message_text(
+                "❌ لا يوجد عميل Pyrogram متاح. تأكد من تشغيل الخدمة.",
+                reply_markup=_admin_kbd(),
+            )
             return
         results = await run_full_scan(_pyro_clients[0])
         s = db.get_stats()
@@ -178,8 +205,10 @@ async def callback_admin_fullscan(update: Update, context: ContextTypes.DEFAULT_
 
 async def callback_admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    if not query or update.effective_user.id != ADMIN_ID:
-        if query: await query.answer("غير مصرح!", show_alert=True)
+    if not query:
+        return
+    if update.effective_user.id != ADMIN_ID:
+        await query.answer("⛔ غير مصرح!", show_alert=True)
         return
     await query.answer()
     s = db.get_stats()
@@ -197,17 +226,24 @@ async def callback_admin_stats(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def callback_admin_new(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    if not query: return
+    if not query:
+        return
+    if update.effective_user.id != ADMIN_ID:
+        await query.answer("⛔ غير مصرح!", show_alert=True)
+        return
     await query.answer()
     stats = db.get_stats()
-    movies = stats.get("latest_movies", [])[:5]
+    movies = stats.get("latest_movies", [])[:8]
     lines = ["🆕 *آخر الإضافات:*\n"]
     if movies:
+        lines.append("🎬 *أفلام:*")
         for m in movies:
             title = m.get("title_ar") or m.get("title", "")
             lines.append(f"  {'✅' if m.get('file_id') else '⏳'} {title}")
+    else:
+        lines.append("لا توجد أفلام بعد.")
     await query.edit_message_text(
-        "\n".join(lines), parse_mode="Markdown", reply_markup=_admin_kbd()
+        "\n".join(lines), parse_mode="Markdown", reply_markup=_admin_kbd(),
     )
 
 
