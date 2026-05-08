@@ -430,6 +430,52 @@ async def debug_bot_membership():
     return {"private_group_id": PRIVATE_GROUP_ID, "clients": results}
 
 
+@app.get("/api/debug/dialogs")
+async def debug_dialogs():
+    """List first 20 dialogs from each Pyrogram client — for peer cache diagnostics."""
+    from app.stream import _pyro_clients
+    from app.config import PRIVATE_GROUP_ID
+    results = []
+    for i, pyro in enumerate(_pyro_clients):
+        dialogs = []
+        error = None
+        try:
+            async for dlg in pyro.get_dialogs():
+                chat = dlg.chat
+                cid = getattr(chat, "id", None)
+                title = getattr(chat, "title", getattr(chat, "first_name", str(cid)))
+                dialogs.append({"id": cid, "title": title, "is_target": abs(cid or 0) == abs(PRIVATE_GROUP_ID)})
+                if len(dialogs) >= 20:
+                    break
+        except Exception as e:
+            error = f"{type(e).__name__}: {e}"
+        results.append({"client": i, "dialogs": dialogs, "error": error})
+    return {"private_group_id": PRIVATE_GROUP_ID, "clients": results}
+
+
+@app.get("/api/debug/config")
+async def debug_config():
+    """Show non-sensitive config values for diagnostics."""
+    from app.config import PRIVATE_GROUP_ID, PUBLIC_CHANNEL_ID, ADMIN_ID, SESSION_1_API_ID, SESSION_2_API_ID
+    from app.config import MAIN_BOT_TOKEN, STREAM_BOT_1, STREAM_BOT_2
+    import re
+    def mask(v: str) -> str:
+        if not v: return "(not set)"
+        if re.match(r'^\d+:[A-Za-z0-9_-]{30,}$', v.strip()): return f"bot_token:{v[:10]}..."
+        if len(v) > 50: return f"session_string:{len(v)}chars"
+        return f"value:{v[:8]}..."
+    return {
+        "PRIVATE_GROUP_ID": PRIVATE_GROUP_ID,
+        "PUBLIC_CHANNEL_ID": PUBLIC_CHANNEL_ID,
+        "ADMIN_ID": ADMIN_ID,
+        "SESSION_1_API_ID": SESSION_1_API_ID,
+        "SESSION_2_API_ID": SESSION_2_API_ID,
+        "MAIN_BOT_TOKEN": mask(MAIN_BOT_TOKEN),
+        "STREAM_BOT_1": mask(STREAM_BOT_1),
+        "STREAM_BOT_2": mask(STREAM_BOT_2),
+    }
+
+
 @app.get("/api/search")
 async def search(q: str = Query("", min_length=1), limit: int = Query(20)):
     import sqlite3 as sq
