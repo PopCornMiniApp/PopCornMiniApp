@@ -20,6 +20,25 @@ function fmtTime(s: number) {
   return `${m}:${sec.toString().padStart(2, "0")}`;
 }
 
+function SkipIcon({ seconds, forward }: { seconds: number; forward: boolean }) {
+  return (
+    <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+      {forward ? (
+        <path d="M14 4 A10 10 0 1 1 6 20" stroke="white" strokeWidth="2" strokeLinecap="round" fill="none"/>
+      ) : (
+        <path d="M14 4 A10 10 0 1 0 22 20" stroke="white" strokeWidth="2" strokeLinecap="round" fill="none"/>
+      )}
+      {forward
+        ? <polyline points="18,1 22,5 18,9" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
+        : <polyline points="10,1 6,5 10,9" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
+      }
+      <text x="14" y="17" textAnchor="middle" fill="white" fontSize="8" fontWeight="bold" fontFamily="system-ui">
+        {seconds}
+      </text>
+    </svg>
+  );
+}
+
 export default function VideoPlayer({ streamUrl, title, fileSize, onClose }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -29,26 +48,13 @@ export default function VideoPlayer({ streamUrl, title, fileSize, onClose }: Pro
   const [duration, setDuration] = useState(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [controlsVisible, setControlsVisible] = useState(true);
-  const [fullscreenSupported, setFullscreenSupported] = useState(true);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    // Detect if fullscreen API is available (not available in Telegram WebView)
-    const el = containerRef.current;
-    const supported = !!(
-      el?.requestFullscreen ||
-      (el as any)?.webkitRequestFullscreen ||
-      (el as any)?.mozRequestFullScreen ||
-      (el as any)?.msRequestFullscreen
-    );
-    setFullscreenSupported(supported);
-  }, []);
 
   const togglePlay = () => {
     const v = videoRef.current;
     if (!v) return;
-    if (v.paused) { v.play().catch(() => {}); setPlaying(true); }
-    else { v.pause(); setPlaying(false); }
+    if (v.paused) { v.play().catch(() => {}); }
+    else { v.pause(); }
   };
 
   const toggleMute = () => {
@@ -66,47 +72,34 @@ export default function VideoPlayer({ streamUrl, title, fileSize, onClose }: Pro
     setCurrentTime(t);
   };
 
+  const skipSeconds = (sec: number) => {
+    const v = videoRef.current;
+    if (!v) return;
+    v.currentTime = Math.max(0, Math.min((v.currentTime || 0) + sec, duration || 0));
+  };
+
   const toggleFullscreen = async () => {
     const el = containerRef.current;
     if (!el) return;
-
     try {
       if (!isFullscreen) {
-        if (el.requestFullscreen) {
-          await el.requestFullscreen();
-        } else if ((el as any).webkitRequestFullscreen) {
-          await (el as any).webkitRequestFullscreen();
-        } else if ((el as any).mozRequestFullScreen) {
-          await (el as any).mozRequestFullScreen();
-        } else if ((el as any).msRequestFullscreen) {
-          await (el as any).msRequestFullscreen();
-        } else {
-          // Fallback for Telegram WebView: expand video element inline
-          setIsFullscreen(true);
-          return;
-        }
+        if (el.requestFullscreen) await el.requestFullscreen();
+        else if ((el as any).webkitRequestFullscreen) await (el as any).webkitRequestFullscreen();
+        else if ((el as any).mozRequestFullScreen) await (el as any).mozRequestFullScreen();
+        else setIsFullscreen(true);
       } else {
-        if (document.exitFullscreen) {
-          await document.exitFullscreen();
-        } else if ((document as any).webkitExitFullscreen) {
-          await (document as any).webkitExitFullscreen();
-        } else {
-          setIsFullscreen(false);
-          return;
-        }
+        if (document.exitFullscreen) await document.exitFullscreen();
+        else if ((document as any).webkitExitFullscreen) await (document as any).webkitExitFullscreen();
+        else setIsFullscreen(false);
       }
     } catch {
-      // requestFullscreen rejected (Telegram WebView policy) — use CSS expansion
       setIsFullscreen(v => !v);
     }
   };
 
   useEffect(() => {
     const onFsChange = () => {
-      const fs = !!(
-        document.fullscreenElement ||
-        (document as any).webkitFullscreenElement
-      );
+      const fs = !!(document.fullscreenElement || (document as any).webkitFullscreenElement);
       setIsFullscreen(fs);
     };
     document.addEventListener("fullscreenchange", onFsChange);
@@ -120,30 +113,27 @@ export default function VideoPlayer({ streamUrl, title, fileSize, onClose }: Pro
   const showControls = () => {
     setControlsVisible(true);
     if (hideTimer.current) clearTimeout(hideTimer.current);
-    if (playing) {
-      hideTimer.current = setTimeout(() => setControlsVisible(false), 3000);
-    }
+    if (playing) hideTimer.current = setTimeout(() => setControlsVisible(false), 3000);
   };
 
-  useEffect(() => {
-    return () => { if (hideTimer.current) clearTimeout(hideTimer.current); };
-  }, []);
+  useEffect(() => () => { if (hideTimer.current) clearTimeout(hideTimer.current); }, []);
 
   const progress = duration ? (currentTime / duration) * 100 : 0;
+  const isCssFs = isFullscreen && !document.fullscreenElement;
 
   return (
     <div
       ref={containerRef}
       onClick={showControls}
       style={{
-        position: isFullscreen && !document.fullscreenElement ? "fixed" : "relative",
-        inset: isFullscreen && !document.fullscreenElement ? 0 : undefined,
-        zIndex: isFullscreen && !document.fullscreenElement ? 9999 : undefined,
+        position: isCssFs ? "fixed" : "relative",
+        inset: isCssFs ? 0 : undefined,
+        zIndex: isCssFs ? 9999 : undefined,
         background: "#000",
-        aspectRatio: isFullscreen ? undefined : "16/9",
+        aspectRatio: isCssFs ? undefined : "16/9",
         width: "100%",
+        height: isCssFs ? "100%" : undefined,
         overflow: "hidden",
-        borderRadius: isFullscreen ? 0 : 0,
       }}
     >
       <video
@@ -158,11 +148,10 @@ export default function VideoPlayer({ streamUrl, title, fileSize, onClose }: Pro
         onEnded={() => setPlaying(false)}
       />
 
-      {/* Controls overlay */}
       <div style={{
         position: "absolute", inset: 0,
         background: controlsVisible
-          ? "linear-gradient(to bottom, rgba(0,0,0,0.55) 0%, transparent 25%, transparent 65%, rgba(0,0,0,0.85) 100%)"
+          ? "linear-gradient(to bottom, rgba(0,0,0,0.6) 0%, transparent 25%, transparent 60%, rgba(0,0,0,0.85) 100%)"
           : "transparent",
         opacity: controlsVisible ? 1 : 0,
         transition: "opacity 0.3s",
@@ -176,32 +165,43 @@ export default function VideoPlayer({ streamUrl, title, fileSize, onClose }: Pro
             style={{ background: "rgba(0,0,0,0.5)", borderRadius: "50%", padding: 6, display: "flex" }}>
             <X size={18} />
           </button>
-          <p style={{ fontSize: 12, fontWeight: 600, color: "#fff", maxWidth: "70%",
+          <p style={{ fontSize: 12, fontWeight: 600, color: "#fff", maxWidth: "65%",
             overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>{title}</p>
           <button onClick={e => { e.stopPropagation(); toggleFullscreen(); }}
-            style={{ background: "rgba(0,0,0,0.5)", borderRadius: "50%", padding: 6, display: "flex" }}
-            title={fullscreenSupported ? "شاشة كاملة" : "توسيع"}>
+            style={{ background: "rgba(0,0,0,0.5)", borderRadius: "50%", padding: 6, display: "flex" }}>
             {isFullscreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
           </button>
         </div>
 
-        {/* Center play button */}
-        <div style={{ display: "flex", justifyContent: "center" }}>
+        {/* Center controls: skip-back | play | skip-forward */}
+        <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 28 }}>
+          <button
+            onClick={e => { e.stopPropagation(); skipSeconds(-10); }}
+            style={{ background: "rgba(0,0,0,0.45)", borderRadius: "50%", padding: 10, display: "flex",
+              backdropFilter: "blur(4px)", border: "1px solid rgba(255,255,255,0.15)" }}>
+            <SkipIcon seconds={10} forward={false} />
+          </button>
           <button onClick={e => { e.stopPropagation(); togglePlay(); }}
-            style={{ background: "rgba(0,0,0,0.6)", borderRadius: "50%", padding: 14, display: "flex",
-              backdropFilter: "blur(4px)", border: "1px solid rgba(255,255,255,0.2)" }}>
-            {playing ? <Pause size={28} /> : <Play size={28} fill="#fff" />}
+            style={{ background: "rgba(0,0,0,0.65)", borderRadius: "50%", padding: 16, display: "flex",
+              backdropFilter: "blur(4px)", border: "2px solid rgba(255,255,255,0.25)" }}>
+            {playing ? <Pause size={30} /> : <Play size={30} fill="#fff" />}
+          </button>
+          <button
+            onClick={e => { e.stopPropagation(); skipSeconds(10); }}
+            style={{ background: "rgba(0,0,0,0.45)", borderRadius: "50%", padding: 10, display: "flex",
+              backdropFilter: "blur(4px)", border: "1px solid rgba(255,255,255,0.15)" }}>
+            <SkipIcon seconds={10} forward={true} />
           </button>
         </div>
 
         {/* Bottom controls */}
         <div>
-          {/* Progress bar */}
           <input type="range" min={0} max={100} value={progress} onChange={seek}
             onClick={e => e.stopPropagation()}
             style={{
               width: "100%", height: 3, cursor: "pointer", marginBottom: 8,
-              accentColor: "#f59e0b", background: `linear-gradient(to right, #f59e0b ${progress}%, rgba(255,255,255,0.2) ${progress}%)`,
+              accentColor: "#f59e0b",
+              background: `linear-gradient(to right, #f59e0b ${progress}%, rgba(255,255,255,0.2) ${progress}%)`,
               borderRadius: 2,
             }}
           />

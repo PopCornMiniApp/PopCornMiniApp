@@ -1,62 +1,63 @@
-import { Home, Search, Film, Tv } from "lucide-react";
+import { Home, Search, Grid, Tv } from "lucide-react";
 
 interface Props {
   current: string;
-  browseType?: "movies" | "series";
+  browseType?: string;
   navigate: (r: any) => void;
 }
 
 export default function NavBar({ current, browseType, navigate }: Props) {
-  const items = [
-    { key: "home",   icon: Home,   label: "الرئيسية", action: () => navigate({ page: "home" }) },
-    { key: "movies", icon: Film,   label: "أفلام",    action: () => navigate({ page: "browse", type: "movies" }) },
-    { key: "series", icon: Tv,     label: "مسلسلات",  action: () => navigate({ page: "browse", type: "series" }) },
-    { key: "search", icon: Search, label: "بحث",      action: () => navigate({ page: "search" }) },
+  const tabs = [
+    { id: "home",   label: "الرئيسية", icon: <Home size={20} /> },
+    { id: "movies", label: "أفلام",    icon: <Grid size={20} /> },
+    { id: "series", label: "مسلسلات",  icon: <Tv size={20} /> },
+    { id: "search", label: "بحث",      icon: <Search size={20} /> },
   ];
 
-  const getActiveKey = () => {
-    if (current === "browse") return browseType === "series" ? "series" : "movies";
-    return current;
+  const isActive = (id: string) => {
+    if (id === "home") return current === "home";
+    if (id === "movies") return current === "browse" && browseType !== "series";
+    if (id === "series") return current === "browse" && browseType === "series";
+    return current === id;
   };
-  const activeKey = getActiveKey();
 
   return (
     <nav style={{
-      position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 100,
-      background: "rgba(13,13,13,0.97)",
+      position: "fixed",
+      bottom: 0, left: 0, right: 0,
+      zIndex: 90,
+      background: "rgba(13,13,13,0.96)",
       backdropFilter: "blur(20px)",
       borderTop: "1px solid rgba(255,255,255,0.07)",
       display: "flex",
-      paddingBottom: "env(safe-area-inset-bottom, 0px)",
+      paddingBottom: "calc(var(--tg-safe-bottom, env(safe-area-inset-bottom, 0px)) + 4px)",
     }}>
-      {items.map(({ key, icon: Icon, label, action }) => {
-        const isActive = activeKey === key;
+      {tabs.map(t => {
+        const active = isActive(t.id);
         return (
           <button
-            key={key}
-            onClick={action}
+            key={t.id}
+            onClick={() => {
+              if (t.id === "home")   navigate({ page: "home" });
+              else if (t.id === "movies") navigate({ page: "browse", type: "movies" });
+              else if (t.id === "series") navigate({ page: "browse", type: "series" });
+              else navigate({ page: "search" });
+            }}
             style={{
-              flex: 1, display: "flex", flexDirection: "column",
-              alignItems: "center", justifyContent: "center",
-              padding: "10px 0 8px",
-              color: isActive ? "#f59e0b" : "rgba(255,255,255,0.38)",
+              flex: 1, padding: "10px 0 6px", display: "flex", flexDirection: "column",
+              alignItems: "center", gap: 3,
+              color: active ? "#f59e0b" : "rgba(255,255,255,0.4)",
               transition: "color 0.2s",
-              gap: 4,
             }}
           >
-            <Icon size={22} strokeWidth={isActive ? 2.2 : 1.6} />
-            <span style={{ fontSize: 10, fontWeight: isActive ? 700 : 500, letterSpacing: 0.2 }}>
-              {label}
-            </span>
-            {isActive && (
-              <span style={{
-                position: "absolute",
-                bottom: "calc(100% - 2px + env(safe-area-inset-bottom, 0px))",
-                width: 24, height: 3, borderRadius: 2,
-                background: "#f59e0b",
-                marginTop: -2,
-              }} />
-            )}
+            <div style={{
+              padding: "4px 12px", borderRadius: 12,
+              background: active ? "rgba(245,158,11,0.12)" : "transparent",
+              transition: "background 0.2s",
+            }}>
+              {t.icon}
+            </div>
+            <span style={{ fontSize: 10, fontWeight: active ? 700 : 400 }}>{t.label}</span>
           </button>
         );
       })}

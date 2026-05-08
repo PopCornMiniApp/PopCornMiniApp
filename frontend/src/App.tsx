@@ -1,10 +1,30 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Home from "./pages/Home";
 import MovieDetail from "./pages/MovieDetail";
 import SeriesDetail from "./pages/SeriesDetail";
 import SearchPage from "./pages/SearchPage";
 import BrowsePage from "./pages/BrowsePage";
 import NavBar from "./components/NavBar";
+
+declare global {
+  interface Window {
+    Telegram?: {
+      WebApp?: {
+        expand: () => void;
+        ready: () => void;
+        BackButton: {
+          show: () => void;
+          hide: () => void;
+          onClick: (fn: () => void) => void;
+          offClick: (fn: () => void) => void;
+          isVisible: boolean;
+        };
+        safeAreaInset?: { top: number; bottom: number; left: number; right: number };
+        contentSafeAreaInset?: { top: number; bottom: number; left: number; right: number };
+      };
+    };
+  }
+}
 
 type Route =
   | { page: "home" }
@@ -17,26 +37,48 @@ export default function App() {
   const [route, setRoute] = useState<Route>({ page: "home" });
   const [history, setHistory] = useState<Route[]>([]);
 
-  const navigate = (r: Route) => {
-    setHistory(h => [...h, route]);
-    setRoute(r);
-    window.scrollTo(0, 0);
-  };
-
-  const goBack = () => {
-    if (!history.length) { setRoute({ page: "home" }); return; }
-    const prev = history[history.length - 1];
-    setHistory(h => h.slice(0, -1));
-    setRoute(prev);
-    window.scrollTo(0, 0);
-  };
-
   useEffect(() => {
+    const tg = window.Telegram?.WebApp;
+    if (tg) {
+      tg.ready();
+      tg.expand();
+      const top =
+        (tg.contentSafeAreaInset?.top ?? 0) + (tg.safeAreaInset?.top ?? 0);
+      document.documentElement.style.setProperty("--tg-safe-top", `${top}px`);
+    }
     const h = window.location.hash;
     if (h === "#/movies") navigate({ page: "browse", type: "movies" });
     else if (h === "#/series") navigate({ page: "browse", type: "series" });
     else if (h === "#/search") navigate({ page: "search" });
   }, []);
+
+  const goBack = useCallback(() => {
+    setHistory(h => {
+      if (!h.length) { setRoute({ page: "home" }); return h; }
+      const prev = h[h.length - 1];
+      setRoute(prev);
+      window.scrollTo(0, 0);
+      return h.slice(0, -1);
+    });
+  }, []);
+
+  useEffect(() => {
+    const tg = window.Telegram?.WebApp;
+    if (!tg?.BackButton) return;
+    if (history.length > 0) {
+      tg.BackButton.show();
+      tg.BackButton.onClick(goBack);
+      return () => tg.BackButton.offClick(goBack);
+    } else {
+      tg.BackButton.hide();
+    }
+  }, [history.length, goBack]);
+
+  const navigate = (r: Route) => {
+    setHistory(h => [...h, route]);
+    setRoute(r);
+    window.scrollTo(0, 0);
+  };
 
   const isDetail = route.page === "movie" || route.page === "series";
   const browseType = route.page === "browse" ? (route as any).type : undefined;

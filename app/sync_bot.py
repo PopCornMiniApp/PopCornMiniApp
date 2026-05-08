@@ -72,7 +72,6 @@ async def register_topic(topic_name: str, topic_id: int) -> bool:
         logger.info(f"✅ Series registered: {tmdb_data['title']}")
 
     push_db_to_hf()
-    # Clear all in-memory cache so new content appears immediately in API
     cache_clear_all()
     return True
 
@@ -88,7 +87,6 @@ def _find_movie_by_topic(topic_id: int) -> dict | None:
 
 
 def _map_topic_to_series(topic_id: int) -> str | None:
-    """Return series_id for a topic_id from topic_series_map table (if exists)."""
     conn = sqlite3.connect(DB_PATH)
     try:
         try:
@@ -113,7 +111,6 @@ def _find_series_by_topic(topic_id: int) -> dict | None:
         ).fetchone()
         if row:
             return dict(row)
-        # Fallback: topic_series_map
         sid = _map_topic_to_series(topic_id)
         if sid:
             row2 = conn.execute("SELECT * FROM series WHERE id=?", (sid,)).fetchone()
@@ -124,33 +121,28 @@ def _find_series_by_topic(topic_id: int) -> dict | None:
 
 
 async def handle_file_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle video/document messages in the private group topics."""
     msg = update.effective_message
     if not msg:
         return
 
-    # Only care about messages from the private group
     chat_id = msg.chat_id if msg.chat_id else (msg.chat.id if msg.chat else None)
     if chat_id != PRIVATE_GROUP_ID:
         return
 
-    # Must have a caption with hashtags
     caption = msg.caption or ""
     if not caption.strip():
         return
 
-    # Extract file info
     file_obj = msg.video or msg.document
     if not file_obj:
         return
 
-    file_id = file_obj.file_id
+    file_id   = file_obj.file_id
     file_size = getattr(file_obj, "file_size", None) or 0
-    duration = getattr(file_obj, "duration", None) or 0
+    duration  = getattr(file_obj, "duration",  None) or 0
     message_id = msg.message_id
-    topic_id = getattr(msg, "message_thread_id", None) or 0
+    topic_id   = getattr(msg, "message_thread_id", None) or 0
 
-    # ── Movie file ──────────────────────────────────────────────────────────
     if MOVIE_CAP_RE.search(caption):
         movie = _find_movie_by_topic(topic_id)
         if movie:
@@ -162,7 +154,6 @@ async def handle_file_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             logger.warning(f"No movie found for topic_id={topic_id}")
         return
 
-    # ── Episode file ────────────────────────────────────────────────────────
     ep_match = EPISODE_CAP_RE.search(caption)
     if ep_match:
         season_num  = int(ep_match.group(1))
@@ -173,7 +164,6 @@ async def handle_file_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             logger.warning(f"No series found for topic_id={topic_id}")
             return
 
-        # Ensure episode row exists (upsert metadata from TMDB if needed)
         existing_ep = db.get_episode(series["id"], season_num, episode_num)
         if not existing_ep:
             ep_meta = await fetch_episode_info(series.get("tmdb_id"), season_num, episode_num)
@@ -194,11 +184,36 @@ async def handle_file_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         push_db_to_hf()
         cache_clear_all()
         logger.info(
-            f"✅ Episode saved: {series['title']} S{season_num:02d}E{episode_num:02d} — file_id={file_id[:20]}..."
+            f"✅ Episode saved: {series['title']} S{season_num:02d}E{episode_num:02d}"
         )
         return
 
     logger.debug(f"Message in topic {topic_id} has no recognised caption pattern: {caption[:80]}")
+
+
+async def cmd_fullscan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin command: scan ALL topics and messages to sync missing content."""
+    if update.effective_user.id != ADMIN_ID:
+        return
+    msg = update.effective_message
+    await msg.reply_text("🔍 بدء المسح الكامل للمجموعة... قد يستغرق بضع دقائق.")
+    try:
+        from app.stream import _pyro_clients
+        from app.scanner import run_full_scan
+        if not _pyro_clients:
+            await msg.reply_text("❌ لا يوجد عميل Pyrogram متاح. تأكد من تشغيل الخدمة.")
+            return
+        results = await run_full_scan(_pyro_clients[0])
+        await msg.reply_text(
+            f"✅ اكتمل المسح!\n"
+            f"📋 مواضيع مفحوصة: {results['topics_scanned']}\n"
+            f"➕ محتوى جديد مسجّل: {results['registered']}\n"
+            f"🎬 ملفات مرفقة: {results['files_attached']}\n"
+            f"⚠️ أخطاء: {results['errors']}"
+        )
+    except Exception as e:
+        logger.error(f"fullscan error: {e}", exc_info=True)
+        await msg.reply_text(f"❌ خطأ أثناء المسح: {e}")
 
 
 def build_sync_app() -> Application:
@@ -209,4 +224,5 @@ def build_sync_app() -> Application:
             handle_file_message,
         )
     )
+    app.add_handler(CommandHandler("fullscan", cmd_fullscan))
     return app
