@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { api, type Series, type Episode } from "../api";
 import VideoPlayer from "../components/VideoPlayer";
-import { ArrowRight, Star, Play, ChevronDown, Calendar } from "lucide-react";
+import { ArrowRight, Star, Play, Calendar } from "lucide-react";
 
 interface Props { id: string; navigate: (r: any) => void; goBack: () => void; }
 
@@ -58,7 +58,7 @@ export default function SeriesDetail({ id, navigate, goBack }: Props) {
         {playingEp?.stream_url && (
           <VideoPlayer
             streamUrl={playingEp.stream_url}
-            title={`${title} - S${playingEp.season_number}E${playingEp.episode_number} ${playingEp.title || ""}`}
+            title={`${title} — الموسم ${playingEp.season_number} الحلقة ${playingEp.episode_number}${playingEp.title ? ` — ${playingEp.title}` : ""}`}
             fileSize={playingEp.file_size}
             onClose={() => setPlayingEp(null)}
           />
@@ -115,7 +115,7 @@ export default function SeriesDetail({ id, navigate, goBack }: Props) {
         {genres.length > 0 && (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 14 }}>
             {genres.map((g: any) => (
-              <span key={g} style={{
+              <span key={typeof g === "string" ? g : g.name} style={{
                 padding: "4px 12px", borderRadius: 20, fontSize: 11,
                 background: "rgba(139,92,246,0.15)", border: "1px solid rgba(139,92,246,0.35)", color: "#c4b5fd",
               }}>{typeof g === "string" ? g : g.name}</span>
@@ -131,12 +131,13 @@ export default function SeriesDetail({ id, navigate, goBack }: Props) {
           </div>
         )}
 
-        {/* Season selector */}
+        {/* Season selector — tabs for ≤5, dropdown for >5 */}
         {seasonNums.length > 0 && (
           <div style={{ marginTop: 22 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
               <h3 style={{ fontSize: 15, fontWeight: 700 }}>الحلقات</h3>
-              {seasonNums.length > 1 && (
+              {/* Dropdown for more than 5 seasons */}
+              {seasonNums.length > 5 && (
                 <select
                   value={activeSeason}
                   onChange={e => setActiveSeason(Number(e.target.value))}
@@ -146,13 +147,15 @@ export default function SeriesDetail({ id, navigate, goBack }: Props) {
                   }}
                 >
                   {seasonNums.map(n => (
-                    <option key={n} value={n} style={{ background: "#1a1a1a" }}>الموسم {n} ({(seasons[String(n)] || []).length} حلقة)</option>
+                    <option key={n} value={n} style={{ background: "#1a1a1a" }}>
+                      الموسم {n} ({(seasons[String(n)] || []).length} حلقة)
+                    </option>
                   ))}
                 </select>
               )}
             </div>
 
-            {/* Season tabs if <= 5 seasons */}
+            {/* Tab buttons for ≤5 seasons */}
             {seasonNums.length <= 5 && (
               <div style={{ display: "flex", gap: 8, marginBottom: 14, overflowX: "auto", scrollbarWidth: "none" } as any}>
                 {seasonNums.map(n => (
@@ -162,7 +165,12 @@ export default function SeriesDetail({ id, navigate, goBack }: Props) {
                     color: activeSeason === n ? "#fff" : "rgba(255,255,255,0.5)",
                     border: activeSeason === n ? "1px solid #8b5cf6" : "1px solid rgba(255,255,255,0.1)",
                     transition: "all 0.2s",
-                  }}>الموسم {n}</button>
+                  }}>
+                    الموسم {n}
+                    <span style={{ marginRight: 4, opacity: 0.6, fontSize: 10 }}>
+                      ({(seasons[String(n)] || []).length})
+                    </span>
+                  </button>
                 ))}
               </div>
             )}
@@ -179,7 +187,8 @@ export default function SeriesDetail({ id, navigate, goBack }: Props) {
                   display: "flex", gap: 12, alignItems: "center",
                   background: playingEp?.id === ep.id ? "rgba(139,92,246,0.15)" : "rgba(255,255,255,0.04)",
                   border: playingEp?.id === ep.id ? "1px solid rgba(139,92,246,0.4)" : "1px solid rgba(255,255,255,0.06)",
-                  borderRadius: 12, padding: "10px 12px", cursor: ep.has_file ? "pointer" : "default",
+                  borderRadius: 12, padding: "10px 12px",
+                  cursor: ep.has_file ? "pointer" : "default",
                   transition: "background 0.2s",
                 }}>
                   {/* Episode thumbnail or number */}
@@ -189,8 +198,11 @@ export default function SeriesDetail({ id, navigate, goBack }: Props) {
                   }}>
                     {ep.still_path
                       ? <img src={ep.still_path} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                      : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center",
-                          fontSize: 18, color: "rgba(255,255,255,0.2)" }}>{ep.episode_number}</div>}
+                      : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center",
+                          justifyContent: "center", fontSize: 18, color: "rgba(255,255,255,0.2)" }}>
+                          {ep.episode_number}
+                        </div>
+                    }
                     {ep.has_file && (
                       <div style={{
                         position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center",
@@ -232,8 +244,10 @@ export default function SeriesDetail({ id, navigate, goBack }: Props) {
                       ? <img src={c.profile} alt={c.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                       : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24 }}>👤</div>}
                   </div>
-                  <p style={{ fontSize: 10, lineHeight: 1.2, color: "rgba(255,255,255,0.7)", overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" as any }}>{c.name}</p>
-                  {c.character && <p style={{ fontSize: 9, color: "rgba(255,255,255,0.35)", marginTop: 1, overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>{c.character}</p>}
+                  <p style={{ fontSize: 10, lineHeight: 1.2, color: "rgba(255,255,255,0.7)", overflow: "hidden",
+                    display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" as any }}>{c.name}</p>
+                  {c.character && <p style={{ fontSize: 9, color: "rgba(255,255,255,0.35)", marginTop: 1,
+                    overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>{c.character}</p>}
                 </div>
               ))}
             </div>
