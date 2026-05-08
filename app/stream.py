@@ -158,11 +158,12 @@ async def init_pyrogram():
         return
 
     # Clear any old/corrupt session files from previous runs to avoid startup failures
+    import os as _os
     for _sname in ("main", "s1", "s2"):
         _sf = f"/tmp/popcorn_{_sname}.session"
-        if os.path.exists(_sf):
+        if _os.path.exists(_sf):
             try:
-                os.remove(_sf)
+                _os.remove(_sf)
                 logger.info("Cleared old session file: %s", _sf)
             except Exception:
                 pass
