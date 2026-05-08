@@ -306,6 +306,35 @@ async def stream_info_ep(file_id: str):
     return await get_stream_info(file_id)
 
 
+@app.get("/api/debug/stream-test/{file_id:path}")
+async def debug_stream_test_ep(file_id: str):
+    """Diagnostic: test Pyrogram access without streaming video data."""
+    from app.stream import debug_stream_test
+    return await debug_stream_test(file_id)
+
+
+@app.get("/api/debug/bot-membership")
+async def debug_bot_membership():
+    """Diagnostic: check if bots are members of the private group."""
+    from app.stream import _pyro_clients
+    from app.config import PRIVATE_GROUP_ID
+    results = []
+    for i, pyro in enumerate(_pyro_clients):
+        info: dict = {"client": i, "can_get_chat": False, "chat_error": None,
+                      "is_member": False, "member_error": None}
+        try:
+            chat = await asyncio.wait_for(pyro.get_chat(PRIVATE_GROUP_ID), timeout=10)
+            info["can_get_chat"] = True
+            info["chat_title"] = getattr(chat, "title", str(chat))
+            info["is_member"] = True
+        except asyncio.TimeoutError:
+            info["chat_error"] = "Timeout"
+        except Exception as exc:
+            info["chat_error"] = f"{type(exc).__name__}: {exc}"
+        results.append(info)
+    return {"private_group_id": PRIVATE_GROUP_ID, "clients": results}
+
+
 @app.get("/api/search")
 async def search(q: str = Query("", min_length=1), limit: int = Query(20)):
     import sqlite3 as sq
