@@ -95,31 +95,63 @@ def _next_client():
     return c
 
 
-# Stores startup errors for the /api/debug/pyro-errors endpoint
+# Stores startup errors/status for the /api/debug/pyro-errors endpoint
 _pyro_start_errors: list[dict] = []
 
 
-async def init_pyrogram():
-    global _pyro_clients, _pyro_start_errors
-    _pyro_start_errors.clear()
-
-    if not SESSION_1_API_ID or not SESSION_1_API_HASH:
-        msg = "No MTProto credentials — streaming limited to ≤20 MB files"
-        logger.warning(msg)
-        _pyro_start_errors.append({"step": "creds_check", "error": msg})
-        return
-
+def _restore_sessions() -> None:
+    """Download Pyrogram session files from HF Dataset so bots skip re-auth."""
     try:
-        from pyrogram import Client as _PyroClient  # type: ignore
-    except ImportError as e:
-        logger.warning("Pyrogram not installed — streaming limited to ≤20 MB")
-        _pyro_start_errors.append({"step": "import", "error": str(e)})
-        return
+        from huggingface_hub import hf_hub_download
+        from app.config import HF_TOKEN, HF_DATASET_NAME
+        import shutil, os as _os
+        for nm in ("main", "s1", "s2"):
+            fname = f"popcorn_{nm}.session"
+            dest = f"/tmp/{fname}"
+            try:
+                local = hf_hub_download(
+                    repo_id=HF_DATASET_NAME, filename=fname,
+                    repo_type="dataset", token=HF_TOKEN, local_dir="/tmp",
+                )
+                if local != dest:
+                    shutil.copy(local, dest)
+                size = _os.path.getsize(dest)
+                logger.info("📥 Restored session '%s' (%d bytes)", nm, size)
+            except Exception:
+                pass  # Not persisted yet — that's fine
+    except Exception as e:
+        logger.warning("Session restore skipped: %s", e)
 
-    def _is_bot_token(v: str) -> bool:
-        import re
-        return bool(re.match(r'^\d+:[A-Za-z0-9_-]{30,}$', v.strip()))
 
+def _persist_sessions() -> None:
+    """Upload Pyrogram session files to HF Dataset for next restart."""
+    try:
+        from huggingface_hub import HfApi
+        from app.config import HF_TOKEN, HF_DATASET_NAME
+        import os as _os
+        api = HfApi(token=HF_TOKEN)
+        for nm in ("main", "s1", "s2"):
+            fpath = f"/tmp/popcorn_{nm}.session"
+            if _os.path.exists(fpath) and _os.path.getsize(fpath) > 0:
+                try:
+                    api.upload_file(
+                        path_or_fileobj=fpath,
+                        path_in_repo=f"popcorn_{nm}.session",
+                        repo_id=HF_DATASET_NAME, repo_type="dataset", token=HF_TOKEN,
+                    )
+                    logger.info("📤 Persisted session: %s", nm)
+                except Exception as ue:
+                    logger.warning("Session persist '%s' failed: %s", nm, ue)
+    except Exception as e:
+        logger.warning("Session persist skipped: %s", e)
+
+
+def _is_bot_token(v: str) -> bool:
+    import re
+    return bool(re.match(r'^\d+:[A-Za-z0-9_-]{30,}$', v.strip()))
+
+
+def _build_session_list() -> list[tuple]:
     sessions: list[tuple] = []
     if MAIN_BOT_TOKEN:
         sessions.append((MAIN_BOT_TOKEN, SESSION_1_API_ID, SESSION_1_API_HASH, "main", True))
@@ -130,74 +162,153 @@ async def init_pyrogram():
                          SESSION_2_API_ID or SESSION_1_API_ID,
                          SESSION_2_API_HASH or SESSION_1_API_HASH,
                          "s2", _is_bot_token(STREAM_BOT_2)))
+    return sessions
+
+
+async def _start_one_client(value, api_id, api_hash, name, is_bot, raw_channel_id) -> dict:
+    """Try to start a single Pyrogram client. Returns an err_info dict."""
+    from pyrogram import Client as _PyroClient  # type: ignore
+
+    err_info: dict = {
+        "name": name, "is_bot": is_bot,
+        "start_error": None, "group_resolve_error": None,
+        "group_found": False, "flood_wait_seconds": None,
+    }
+
+    if is_bot:
+        client = _PyroClient(
+            name=f"popcorn_{name}",
+            bot_token=value,
+            api_id=api_id,
+            api_hash=api_hash,
+            no_updates=True,
+            workdir="/tmp",
+            sleep_threshold=60,
+        )
+    else:
+        client = _PyroClient(
+            name=f"popcorn_{name}",
+            session_string=value,
+            api_id=api_id,
+            api_hash=api_hash,
+            no_updates=True,
+            sleep_threshold=60,
+        )
+
+    try:
+        await asyncio.wait_for(client.start(), timeout=90)
+        logger.info("✅ Pyrogram client '%s' started", name)
+    except asyncio.TimeoutError:
+        err_info["start_error"] = "Timeout (90s) during client.start()"
+        logger.error("Pyrogram client '%s' timed out", name)
+        return err_info
+    except Exception as exc:
+        exc_name = type(exc).__name__
+        # Detect FloodWait and record the seconds to wait
+        flood_secs = None
+        if exc_name == "FloodWait":
+            flood_secs = getattr(exc, "value", None) or getattr(exc, "x", None)
+            if flood_secs is None:
+                import re as _re
+                m = _re.search(r'(\d+) seconds', str(exc))
+                flood_secs = int(m.group(1)) if m else 300
+            err_info["flood_wait_seconds"] = flood_secs
+        err_info["start_error"] = f"{exc_name}: {exc}"
+        logger.error("Pyrogram client '%s' failed: %s", name, exc)
+        return err_info
+
+    # Resolve private group peer via MTProto (avoids PeerIdInvalid on bots)
+    if PRIVATE_GROUP_ID and raw_channel_id:
+        try:
+            from pyrogram.raw.functions.channels import GetChannels  # type: ignore
+            from pyrogram.raw.types import InputChannel              # type: ignore
+            result = await asyncio.wait_for(
+                client.invoke(
+                    GetChannels(id=[InputChannel(channel_id=raw_channel_id, access_hash=0)])
+                ),
+                timeout=20,
+            )
+            chats = getattr(result, "chats", [])
+            if chats:
+                err_info["group_found"] = True
+                title = getattr(chats[0], "title", raw_channel_id)
+                logger.info("✅ Pyrogram '%s' resolved group: %s", name, title)
+            else:
+                err_info["group_resolve_error"] = "GetChannels: 0 chats (bot not in group?)"
+        except Exception as ge:
+            err_info["group_resolve_error"] = f"{type(ge).__name__}: {ge}"
+            logger.warning("Pyrogram '%s' GetChannels failed: %s", name, ge)
+
+    err_info["client"] = client
+    return err_info
+
+
+async def _delayed_start(session_tuple, raw_channel_id, delay: int):
+    """Background task: wait `delay` seconds then start the client."""
+    value, api_id, api_hash, name, is_bot = session_tuple
+    logger.info("⏳ Waiting %ds (FloodWait) before retrying Pyrogram client '%s'…", delay, name)
+    await asyncio.sleep(delay + 5)
+    result = await _start_one_client(value, api_id, api_hash, name, is_bot, raw_channel_id)
+    if "client" in result:
+        _pyro_clients.append(result.pop("client"))
+        _pyro_start_errors.append(result)
+        _persist_sessions()
+        logger.info("✅ Delayed start of Pyrogram client '%s' succeeded", name)
+    else:
+        _pyro_start_errors.append(result)
+        logger.error("❌ Delayed start of Pyrogram client '%s' failed: %s", name, result.get("start_error"))
+
+
+async def init_pyrogram():
+    global _pyro_clients, _pyro_start_errors
+    _pyro_clients.clear()
+    _pyro_start_errors.clear()
+
+    if not SESSION_1_API_ID or not SESSION_1_API_HASH:
+        msg = "No MTProto credentials — streaming limited to ≤20 MB files"
+        logger.warning(msg)
+        _pyro_start_errors.append({"step": "creds_check", "error": msg})
+        return
+
+    try:
+        from pyrogram import Client as _PyroClient  # noqa — just test import
+        _ = _PyroClient
+    except ImportError as e:
+        logger.warning("Pyrogram not installed — streaming limited to ≤20 MB")
+        _pyro_start_errors.append({"step": "import", "error": str(e)})
+        return
+
+    # Restore session files first so bots skip auth.ImportBotAuthorization
+    _restore_sessions()
 
     raw_channel_id = abs(PRIVATE_GROUP_ID)
     s = str(raw_channel_id)
     if s.startswith("100"):
         raw_channel_id = int(s[3:])
 
-    for value, api_id, api_hash, name, is_bot in sessions:
-        err_info: dict = {"name": name, "is_bot": is_bot, "start_error": None,
-                          "group_resolve_error": None, "group_found": False}
-        try:
-            if is_bot:
-                client = _PyroClient(
-                    name=f"popcorn_{name}",
-                    bot_token=value,
-                    api_id=api_id,
-                    api_hash=api_hash,
-                    no_updates=True,
-                    workdir="/tmp",
-                    sleep_threshold=60,
-                )
-            else:
-                client = _PyroClient(
-                    name=f"popcorn_{name}",
-                    session_string=value,
-                    api_id=api_id,
-                    api_hash=api_hash,
-                    no_updates=True,
-                    sleep_threshold=60,
-                )
-            await asyncio.wait_for(client.start(), timeout=60)
-            logger.info("✅ Pyrogram client '%s' started (is_bot=%s)", name, is_bot)
-        except asyncio.TimeoutError:
-            err_info["start_error"] = "Timeout after 60s during client.start()"
-            logger.error("Pyrogram client '%s' start timed out", name)
-            _pyro_start_errors.append(err_info)
-            continue
-        except Exception as exc:
-            err_info["start_error"] = f"{type(exc).__name__}: {exc}"
-            logger.error("Pyrogram client '%s' start failed: %s", name, exc)
-            _pyro_start_errors.append(err_info)
-            continue
+    sessions = _build_session_list()
+    any_persisted = False
 
-        # Resolve the private group peer via channels.GetChannels(access_hash=0)
-        if PRIVATE_GROUP_ID:
-            try:
-                from pyrogram.raw.functions.channels import GetChannels  # type: ignore
-                from pyrogram.raw.types import InputChannel              # type: ignore
-                result = await asyncio.wait_for(
-                    client.invoke(
-                        GetChannels(id=[InputChannel(channel_id=raw_channel_id, access_hash=0)])
-                    ),
-                    timeout=20,
-                )
-                chats = getattr(result, "chats", [])
-                if chats:
-                    err_info["group_found"] = True
-                    title = getattr(chats[0], "title", raw_channel_id)
-                    logger.info("✅ Pyrogram '%s' resolved group: %s", name, title)
-                else:
-                    err_info["group_resolve_error"] = "GetChannels returned 0 chats (bot not in group?)"
-                    logger.warning("Pyrogram '%s': group not found via GetChannels", name)
-            except Exception as ge:
-                err_info["group_resolve_error"] = f"{type(ge).__name__}: {ge}"
-                logger.warning("Pyrogram '%s' GetChannels failed: %s", name, ge)
+    for session_tuple in sessions:
+        value, api_id, api_hash, name, is_bot = session_tuple
+        result = await _start_one_client(value, api_id, api_hash, name, is_bot, raw_channel_id)
 
-        _pyro_clients.append(client)
-        _pyro_start_errors.append(err_info)
-        logger.info("Pyrogram client '%s' ready (group_found=%s)", name, err_info["group_found"])
+        flood_secs = result.get("flood_wait_seconds")
+        if flood_secs is not None:
+            # Schedule a background retry after the flood wait clears
+            asyncio.create_task(_delayed_start(session_tuple, raw_channel_id, flood_secs))
+            _pyro_start_errors.append(result)
+        elif "client" in result:
+            _pyro_clients.append(result.pop("client"))
+            _pyro_start_errors.append(result)
+            any_persisted = True
+        else:
+            _pyro_start_errors.append(result)
+
+    if any_persisted:
+        _persist_sessions()
+
+    logger.info("Pyrogram init done: %d client(s) ready", len(_pyro_clients))
 
 
 async def stop_pyrogram():
