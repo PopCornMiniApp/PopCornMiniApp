@@ -275,10 +275,12 @@ def get_stats():
         series_count = conn.execute("SELECT COUNT(*) FROM series").fetchone()[0]
         episodes_count = conn.execute("SELECT COUNT(*) FROM episodes").fetchone()[0]
         latest_movies = conn.execute(
-            "SELECT id, title, poster_path, rating FROM movies ORDER BY created_at DESC LIMIT 6"
+            "SELECT id, title, title_ar, poster_path, backdrop_path, rating, release_date, file_id "
+            "FROM movies ORDER BY created_at DESC LIMIT 8"
         ).fetchall()
         latest_series = conn.execute(
-            "SELECT id, title, poster_path, rating FROM series ORDER BY created_at DESC LIMIT 6"
+            "SELECT id, title, title_ar, poster_path, backdrop_path, rating, first_air_date "
+            "FROM series ORDER BY created_at DESC LIMIT 6"
         ).fetchall()
         return {
             "movies_count": movies_count,
