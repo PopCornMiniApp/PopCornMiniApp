@@ -13,14 +13,12 @@ declare global {
         expand: () => void;
         ready: () => void;
         BackButton: {
-          show: () => void;
-          hide: () => void;
+          show: () => void; hide: () => void;
           onClick: (fn: () => void) => void;
           offClick: (fn: () => void) => void;
           isVisible: boolean;
         };
         safeAreaInset?: { top: number; bottom: number; left: number; right: number };
-        contentSafeAreaInset?: { top: number; bottom: number; left: number; right: number };
       };
     };
   }
@@ -42,8 +40,10 @@ export default function App() {
     if (tg) {
       tg.ready();
       tg.expand();
-      const top =
-        (tg.contentSafeAreaInset?.top ?? 0) + (tg.safeAreaInset?.top ?? 0);
+      /* Only use safeAreaInset — the phone's actual notch/status-bar height.
+         contentSafeAreaInset includes Telegram's UI which is OUTSIDE the viewport,
+         adding it would create a large unnecessary top gap. */
+      const top = tg.safeAreaInset?.top ?? 0;
       document.documentElement.style.setProperty("--tg-safe-top", `${top}px`);
     }
     const h = window.location.hash;
@@ -90,12 +90,7 @@ export default function App() {
       {route.page === "series" && <SeriesDetail id={(route as any).id} navigate={navigate} goBack={goBack} />}
       {route.page === "search" && <SearchPage navigate={navigate} goBack={goBack} />}
       {route.page === "browse" && (
-        <BrowsePage
-          type={(route as any).type}
-          genre={(route as any).genre}
-          navigate={navigate}
-          goBack={goBack}
-        />
+        <BrowsePage type={(route as any).type} genre={(route as any).genre} navigate={navigate} goBack={goBack} />
       )}
       {!isDetail && <NavBar current={route.page} browseType={browseType} navigate={navigate} />}
     </div>

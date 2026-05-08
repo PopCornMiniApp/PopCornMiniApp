@@ -22,25 +22,18 @@ function ContentRow({ title, icon, items, type, navigate, onMore }: {
           </button>
         )}
       </div>
-      <div style={{
-        display: "flex", gap: 12, overflowX: "auto", paddingRight: 16, paddingLeft: 16,
-        scrollbarWidth: "none", WebkitOverflowScrolling: "touch",
-      } as any}>
+      <div style={{ display: "flex", gap: 12, overflowX: "auto", paddingRight: 16, paddingLeft: 16, scrollbarWidth: "none", WebkitOverflowScrolling: "touch" } as any}>
         {items.map((item: any) => (
           <div key={item.id} style={{ flexShrink: 0, width: 120 }}>
             <ContentCard
-              id={item.id}
-              type={(item.type || type) as any}
-              title={item.title}
-              title_ar={item.title_ar}
-              poster_path={item.poster_path}
-              rating={item.rating}
+              id={item.id} type={(item.type || type) as any}
+              title={item.title} title_ar={item.title_ar}
+              poster_path={item.poster_path} rating={item.rating}
               has_file={item.has_file ?? (item.file_id != null)}
               year={item.release_date || item.first_air_date || item.date}
               onClick={() => {
                 const t = item.type || type;
-                if (t === "series") navigate({ page: "series", id: item.id });
-                else navigate({ page: "movie", id: item.id });
+                navigate({ page: t === "series" ? "series" : "movie", id: item.id });
               }}
             />
           </div>
@@ -107,14 +100,13 @@ export default function Home({ navigate }: Props) {
 
   return (
     <div>
-      {/* Sticky Header */}
+      {/* Sticky Header — uses env(safe-area-inset-top) via --tg-safe-top */}
       <div style={{
-        position: "sticky",
-        top: 0, zIndex: 50,
-        background: "rgba(13,13,13,0.94)", backdropFilter: "blur(16px)",
+        position: "sticky", top: 0, zIndex: 50,
+        background: "rgba(13,13,13,0.95)", backdropFilter: "blur(16px)",
         display: "flex", justifyContent: "space-between", alignItems: "center",
-        padding: "10px 16px",
-        paddingTop: "calc(var(--tg-safe-top, env(safe-area-inset-top, 0px)) + 10px)",
+        padding: "8px 16px",
+        paddingTop: "calc(var(--tg-safe-top, env(safe-area-inset-top, 0px)) + 8px)",
         borderBottom: "1px solid rgba(255,255,255,0.05)",
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -124,12 +116,12 @@ export default function Home({ navigate }: Props) {
           </span>
           {stats && (
             <span style={{ fontSize: 10, color: "rgba(255,255,255,0.3)", marginRight: 4 }}>
-              {stats.movies_count} فيلم · {stats.series_count} مسلسل
+              {stats.movies_count}🎬 {stats.series_count}📺
             </span>
           )}
         </div>
         <button onClick={() => navigate({ page: "search" })} style={{
-          background: "rgba(255,255,255,0.08)", borderRadius: 20, padding: "7px 14px",
+          background: "rgba(255,255,255,0.08)", borderRadius: 20, padding: "6px 14px",
           display: "flex", alignItems: "center", gap: 6, color: "rgba(255,255,255,0.55)", fontSize: 13,
           border: "1px solid rgba(255,255,255,0.08)",
         }}>
@@ -137,14 +129,12 @@ export default function Home({ navigate }: Props) {
         </button>
       </div>
 
-      {/* Hero Carousel */}
       {featured.length > 0 && <HeroCarousel items={featured} navigate={navigate} />}
 
-      {/* Genre pills */}
       {genres.length > 0 && (
-        <div style={{ display: "flex", gap: 8, overflowX: "auto", padding: "16px 16px 8px", scrollbarWidth: "none" } as any}>
+        <div style={{ display: "flex", gap: 8, overflowX: "auto", padding: "14px 16px 6px", scrollbarWidth: "none" } as any}>
           <button onClick={() => setActiveGenre(null)} style={{
-            flexShrink: 0, padding: "6px 16px", borderRadius: 20, fontSize: 12, fontWeight: 600,
+            flexShrink: 0, padding: "5px 14px", borderRadius: 20, fontSize: 12, fontWeight: 600,
             background: !activeGenre ? "#f59e0b" : "rgba(255,255,255,0.07)",
             color: !activeGenre ? "#000" : "rgba(255,255,255,0.55)",
             border: !activeGenre ? "1px solid #f59e0b" : "1px solid rgba(255,255,255,0.1)",
@@ -152,7 +142,7 @@ export default function Home({ navigate }: Props) {
           }}>الكل</button>
           {genres.map(g => (
             <button key={g} onClick={() => setActiveGenre(g === activeGenre ? null : g)} style={{
-              flexShrink: 0, padding: "6px 16px", borderRadius: 20, fontSize: 12, fontWeight: 600,
+              flexShrink: 0, padding: "5px 14px", borderRadius: 20, fontSize: 12, fontWeight: 600,
               background: activeGenre === g ? "#f59e0b" : "rgba(255,255,255,0.07)",
               color: activeGenre === g ? "#000" : "rgba(255,255,255,0.55)",
               border: activeGenre === g ? "1px solid #f59e0b" : "1px solid rgba(255,255,255,0.1)",
@@ -162,29 +152,29 @@ export default function Home({ navigate }: Props) {
         </div>
       )}
 
-      <div style={{ paddingTop: 20 }}>
+      <div style={{ paddingTop: 18 }}>
         {!activeGenre && newest.length > 0 && (
-          <ContentRow title="الأحدث" icon={<Flame size={15} color="#f59e0b" />}
+          <ContentRow title="الأحدث" icon={<Flame size={14} color="#f59e0b" />}
             items={newest} type="movie" navigate={navigate}
             onMore={() => navigate({ page: "browse", type: "movies" })} />
         )}
         {filteredTop.length > 0 && (
-          <ContentRow title="الأعلى تقييماً" icon={<Star size={15} color="#f59e0b" />}
+          <ContentRow title="الأعلى تقييماً" icon={<Star size={14} color="#f59e0b" />}
             items={filteredTop} type="movie" navigate={navigate}
             onMore={() => navigate({ page: "browse", type: "movies" })} />
         )}
         {filteredSeries.length > 0 && (
-          <ContentRow title="المسلسلات" icon={<Tv2 size={15} color="#f59e0b" />}
+          <ContentRow title="المسلسلات" icon={<Tv2 size={14} color="#f59e0b" />}
             items={filteredSeries} type="series" navigate={navigate}
             onMore={() => navigate({ page: "browse", type: "series" })} />
         )}
         {filteredMovies.length > 0 && (
-          <ContentRow title="جميع الأفلام" icon={<Clapperboard size={15} color="#f59e0b" />}
+          <ContentRow title="جميع الأفلام" icon={<Clapperboard size={14} color="#f59e0b" />}
             items={filteredMovies} type="movie" navigate={navigate}
             onMore={() => navigate({ page: "browse", type: "movies" })} />
         )}
         {!activeGenre && coming.length > 0 && (
-          <ContentRow title="قريباً" icon={<Clock size={15} color="#f59e0b" />}
+          <ContentRow title="قريباً" icon={<Clock size={14} color="#f59e0b" />}
             items={coming} type="movie" navigate={navigate} />
         )}
         {filteredMovies.length === 0 && filteredSeries.length === 0 && activeGenre && (

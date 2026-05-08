@@ -42,6 +42,10 @@ async def lifespan(app: FastAPI):
             bot_app.add_handler(CommandHandler("stats",    cmd_stats))
             bot_app.add_handler(CommandHandler("admin",    cmd_admin))
             bot_app.add_handler(CommandHandler("sync_db",  _cmd_sync_db))
+            bot_app.add_handler(CommandHandler("fullscan",  _cmd_fullscan))
+            from app.bot_commands import get_callback_handlers
+            for _h in get_callback_handlers():
+                bot_app.add_handler(_h)
             _bot_task = asyncio.create_task(_run_bot(bot_app))
             logger.info("✅ Telegram bot started")
         except Exception as e:
@@ -58,6 +62,27 @@ async def _cmd_sync_db(update, context):
     push_db_to_hf()
     cache_clear_all()
     await update.effective_message.reply_text("✅ تمت المزامنة مع HuggingFace وتم تحديث الكاش!")
+
+
+async def _cmd_fullscan(update, context):
+    if update.effective_user.id != ADMIN_ID: return
+    from app.stream import _pyro_clients
+    from app.scanner import run_full_scan
+    if not _pyro_clients:
+        await update.effective_message.reply_text("❌ لا يوجد عميل Pyrogram متاح.")
+        return
+    msg = await update.effective_message.reply_text("🔍 جارٍ مسح المجموعة الخاصة... قد يستغرق دقائق.")
+    try:
+        results = await run_full_scan(_pyro_clients[0])
+        s = db.get_stats()
+        await msg.edit_text(
+            f"✅ اكتمل المسح!\n\n"
+            f"📋 مواضيع: {results[\'topics_scanned\']} | ➕ جديد: {results[\'registered\']} | "
+            f"🎬 ملفات: {results[\'files_attached\']} | ⚠️ أخطاء: {results[\'errors\']}\n\n"
+            f"📊 المكتبة: {s[\'movies_count\']} فيلم | {s[\'series_count\']} مسلسل | {s[\'episodes_count\']} حلقة"
+        )
+    except Exception as e:
+        await msg.edit_text(f"❌ خطأ: {str(e)[:300]}")
 
 
 async def _run_bot(bot_app):

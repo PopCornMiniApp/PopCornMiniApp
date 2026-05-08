@@ -7,39 +7,28 @@
     <title>🍿 PopCorn</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
-      :root {
-        --tg-safe-top: env(safe-area-inset-top, 0px);
-        --tg-safe-bottom: env(safe-area-inset-bottom, 0px);
-      }
+      :root { --tg-safe-top: env(safe-area-inset-top, 0px); }
       * { box-sizing: border-box; margin: 0; padding: 0; }
-      html { height: 100%; }
-      body {
-        background: #0d0d0d;
-        color: #fff;
-        font-family: 'Segoe UI', system-ui, sans-serif;
-        overflow-x: hidden;
-        height: 100%;
-        overscroll-behavior: none;
-      }
+      html, body { height: 100%; overscroll-behavior: none; }
+      body { background: #0d0d0d; color: #fff; font-family: 'Segoe UI', system-ui, sans-serif; overflow-x: hidden; }
       #root { min-height: 100%; }
       ::-webkit-scrollbar { width: 4px; height: 4px; }
       ::-webkit-scrollbar-track { background: #1a1a1a; }
       ::-webkit-scrollbar-thumb { background: #f59e0b; border-radius: 2px; }
     </style>
     <script>
-      // Apply Telegram safe area before React mounts
-      (function() {
+      (function () {
         try {
           var tg = window.Telegram && window.Telegram.WebApp;
           if (tg) {
-            var top = ((tg.contentSafeAreaInset && tg.contentSafeAreaInset.top) || 0)
-                    + ((tg.safeAreaInset && tg.safeAreaInset.top) || 0);
-            var bot = ((tg.contentSafeAreaInset && tg.contentSafeAreaInset.bottom) || 0)
-                    + ((tg.safeAreaInset && tg.safeAreaInset.bottom) || 0);
-            if (top > 0) document.documentElement.style.setProperty('--tg-safe-top', top + 'px');
-            if (bot > 0) document.documentElement.style.setProperty('--tg-safe-bottom', bot + 'px');
+            /* Use ONLY safeAreaInset — the phone notch/status-bar.
+               contentSafeAreaInset includes Telegram's header which is
+               already OUTSIDE the WebApp viewport — never add it. */
+            var top = (tg.safeAreaInset && tg.safeAreaInset.top) || 0;
+            if (top > 0)
+              document.documentElement.style.setProperty('--tg-safe-top', top + 'px');
           }
-        } catch(e) {}
+        } catch (e) {}
       })();
     </script>
   </head>
