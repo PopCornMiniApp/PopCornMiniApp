@@ -18,7 +18,7 @@ from telegram.ext import Application, MessageHandler, CommandHandler, filters, C
 from app.config import MAIN_BOT_TOKEN, PRIVATE_GROUP_ID, ADMIN_ID, DB_PATH
 from app import database as db
 from app.tmdb import fetch_movie, fetch_series, fetch_episode_info
-from app.database import push_db_to_hf
+from app.database import push_db_to_hf, set_topic_series_map
 from app.cache import cache_clear_all
 
 logger = logging.getLogger(__name__)
@@ -64,11 +64,14 @@ async def register_topic(topic_name: str, topic_id: int) -> bool:
     elif parsed["type"] == "series":
         existing = db.get_series(series_id=parsed["internal_id"])
         if existing:
+            # Still ensure topic→series map is up-to-date
+            set_topic_series_map(topic_id, parsed["internal_id"])
             return True
         tmdb_data = await fetch_series(parsed["tmdb_id"])
         if not tmdb_data:
             return False
         db.upsert_series({"id": parsed["internal_id"], **tmdb_data})
+        set_topic_series_map(topic_id, parsed["internal_id"])
         logger.info(f"✅ Series registered: {tmdb_data['title']}")
 
     push_db_to_hf()
@@ -86,36 +89,29 @@ def _find_movie_by_topic(topic_id: int) -> dict | None:
         conn.close()
 
 
-def _map_topic_to_series(topic_id: int) -> str | None:
-    conn = sqlite3.connect(DB_PATH)
-    try:
-        try:
-            row = conn.execute(
-                "SELECT series_id FROM topic_series_map WHERE topic_id=?", (topic_id,)
-            ).fetchone()
-            return row[0] if row else None
-        except sqlite3.OperationalError:
-            return None
-    finally:
-        conn.close()
-
-
 def _find_series_by_topic(topic_id: int) -> dict | None:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     try:
+        # Try topic_series_map first (fastest)
+        try:
+            row_map = conn.execute(
+                "SELECT s.* FROM series s "
+                "INNER JOIN topic_series_map t ON t.series_id=s.id "
+                "WHERE t.topic_id=?", (topic_id,)
+            ).fetchone()
+            if row_map:
+                return dict(row_map)
+        except sqlite3.OperationalError:
+            pass
+
+        # Fallback: look up via episodes
         row = conn.execute(
             "SELECT s.* FROM series s "
             "INNER JOIN episodes e ON e.series_id=s.id "
             "WHERE e.topic_id=? LIMIT 1", (topic_id,)
         ).fetchone()
-        if row:
-            return dict(row)
-        sid = _map_topic_to_series(topic_id)
-        if sid:
-            row2 = conn.execute("SELECT * FROM series WHERE id=?", (sid,)).fetchone()
-            return dict(row2) if row2 else None
-        return None
+        return dict(row) if row else None
     finally:
         conn.close()
 
@@ -176,11 +172,16 @@ async def handle_file_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                 "still_path": ep_meta.get("still_path", "") if ep_meta else "",
                 "air_date": ep_meta.get("air_date", "") if ep_meta else "",
                 "runtime": ep_meta.get("runtime", 0) if ep_meta else 0,
+                "file_id": file_id,
+                "file_unique_id": getattr(file_obj, "file_unique_id", None),
+                "file_size": file_size,
+                "duration": duration,
                 "topic_id": topic_id,
+                "message_id": message_id,
             })
-
-        db.update_episode_file(series["id"], season_num, episode_num,
-                               file_id, file_size, duration, message_id, topic_id)
+        else:
+            db.update_episode_file(series["id"], season_num, episode_num,
+                                   file_id, file_size, duration, message_id, topic_id)
         push_db_to_hf()
         cache_clear_all()
         logger.info(
@@ -204,12 +205,15 @@ async def cmd_fullscan(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.reply_text("❌ لا يوجد عميل Pyrogram متاح. تأكد من تشغيل الخدمة.")
             return
         results = await run_full_scan(_pyro_clients[0])
+        s = db.get_stats()
         await msg.reply_text(
             f"✅ اكتمل المسح!\n"
             f"📋 مواضيع مفحوصة: {results['topics_scanned']}\n"
             f"➕ محتوى جديد مسجّل: {results['registered']}\n"
             f"🎬 ملفات مرفقة: {results['files_attached']}\n"
-            f"⚠️ أخطاء: {results['errors']}"
+            f"⚠️ أخطاء: {results['errors']}\n\n"
+            f"📊 المكتبة الآن:\n"
+            f"• {s['movies_count']} فيلم | {s['series_count']} مسلسل | {s['episodes_count']} حلقة"
         )
     except Exception as e:
         logger.error(f"fullscan error: {e}", exc_info=True)
