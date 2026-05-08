@@ -208,44 +208,43 @@ async def init_pyrogram():
             client_type = "bot" if is_bot else "user-session"
             logger.info("✅ Pyrogram client '%s' (%s) started", name, client_type)
 
-            # Populate peer cache via get_dialogs (works for both bots and user accounts
-            # that are members of the group).
+            # For Telegram bots, get_dialogs() is blocked by the API.
+            # Instead, use channels.GetChannels with access_hash=0 — Telegram allows
+            # this for bots that ARE members of the channel/supergroup.
+            # Pyrogram will then cache the real access_hash from the response.
             group_found = False
-            try:
-                async for dialog in client.get_dialogs():
-                    chat = dialog.chat
-                    cid = getattr(chat, "id", None)
-                    if cid and abs(int(str(cid))) == abs(PRIVATE_GROUP_ID):
+            if PRIVATE_GROUP_ID:
+                # Strip -100 prefix to get the raw channel_id
+                raw_channel_id = abs(PRIVATE_GROUP_ID)
+                if str(raw_channel_id).startswith("100"):
+                    raw_channel_id = int(str(raw_channel_id)[3:])
+                try:
+                    from pyrogram.raw.functions.channels import GetChannels  # type: ignore
+                    from pyrogram.raw.types import InputChannel              # type: ignore
+                    result = await asyncio.wait_for(
+                        client.invoke(
+                            GetChannels(id=[InputChannel(channel_id=raw_channel_id, access_hash=0)])
+                        ),
+                        timeout=15,
+                    )
+                    chats = getattr(result, "chats", [])
+                    if chats:
                         group_found = True
+                        title = getattr(chats[0], "title", raw_channel_id)
                         logger.info(
-                            "✅ Pyrogram client '%s' found private group in dialogs: %s",
-                            name, getattr(chat, "title", cid)
+                            "✅ Pyrogram client '%s' resolved private group via MTProto: %s",
+                            name, title
                         )
-                        break
-                if not group_found:
-                    # For bots: get_dialogs may not list supergroups — try get_chat directly
-                    if is_bot:
-                        try:
-                            chat = await asyncio.wait_for(
-                                client.get_chat(PRIVATE_GROUP_ID), timeout=15
-                            )
-                            group_found = True
-                            logger.info(
-                                "✅ Pyrogram bot '%s' accessed private group via get_chat: %s",
-                                name, getattr(chat, "title", PRIVATE_GROUP_ID)
-                            )
-                        except Exception as ge:
-                            logger.warning(
-                                "Pyrogram bot '%s' cannot access private group (not a member?): %s",
-                                name, ge
-                            )
                     else:
                         logger.warning(
-                            "Pyrogram user '%s': private group not found in dialogs",
+                            "Pyrogram client '%s': GetChannels returned no chats (bot not in group?)",
                             name
                         )
-            except Exception as de:
-                logger.warning("Pyrogram client '%s' get_dialogs error: %s", name, de)
+                except Exception as re_err:
+                    logger.warning(
+                        "Pyrogram client '%s' MTProto GetChannels failed: %s",
+                        name, re_err
+                    )
 
             _pyro_clients.append(client)
             if group_found:
