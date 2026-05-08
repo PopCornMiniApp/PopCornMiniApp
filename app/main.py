@@ -259,6 +259,111 @@ async def admin_bulk(payload: dict):
     return {"results": results}
 
 
+@app.post("/api/admin/scan_file_ids")
+async def admin_scan_file_ids():
+    """Use the running Pyrogram client to fetch file_ids for all known historical messages."""
+    from app.stream import _pyro_clients
+    from app.config import PRIVATE_GROUP_ID as GROUP_ID, DB_PATH
+    import sqlite3 as sq
+
+    if not _pyro_clients:
+        raise HTTPException(503, "Pyrogram not ready")
+
+    client = _pyro_clients[0]
+
+    # Known message IDs from the original group scan
+    MOVIE_MSGS: dict[str, int] = {
+        'mid00001': 4713, 'mid00002': 4715, 'mid00003': 4717,
+        'mid00004': 4719, 'mid00005': 4721, 'mid00006': 4723,
+        'mid00007': 4726, 'mid00008': 4728, 'mid00009': 4730,
+        'mid00010': 4733, 'mid00011': 4735, 'mid00012': 4737,
+        'mid00013': 4739, 'mid00014': 4742, 'mid00015': 4744,
+        'mid00016': 4746, 'mid00017': 4748, 'mid00018': 4750,
+        'mid00019': 4752, 'mid00020': 4847, 'mid00021': 4849,
+        'mid00022': 4852,
+    }
+
+    # (series_id, season, ep_num) -> message_id
+    EPISODE_MSGS: dict[tuple, int] = {}
+    for msg_id, ep_num, season, series_id in [
+        (4660,1,1,'sid00001'),(4661,2,1,'sid00001'),(4662,3,1,'sid00001'),(4663,4,1,'sid00001'),(4664,5,1,'sid00001'),
+        (4675,1,2,'sid00001'),(4676,2,2,'sid00001'),(4677,3,2,'sid00001'),(4678,4,2,'sid00001'),(4679,5,2,'sid00001'),
+        (4680,6,2,'sid00001'),(4681,7,2,'sid00001'),(4682,8,2,'sid00001'),(4683,9,2,'sid00001'),
+        (4685,1,3,'sid00001'),(4686,2,3,'sid00001'),(4687,3,3,'sid00001'),(4688,4,3,'sid00001'),(4689,5,3,'sid00001'),
+        (4690,6,3,'sid00001'),(4691,7,3,'sid00001'),(4692,8,3,'sid00001'),
+        (4694,1,4,'sid00001'),(4695,2,4,'sid00001'),(4696,3,4,'sid00001'),(4697,4,4,'sid00001'),(4698,5,4,'sid00001'),
+        (4699,6,4,'sid00001'),(4700,7,4,'sid00001'),(4701,8,4,'sid00001'),(4702,9,4,'sid00001'),
+        (4704,1,5,'sid00001'),(4705,2,5,'sid00001'),(4706,3,5,'sid00001'),(4707,4,5,'sid00001'),(4708,5,5,'sid00001'),
+        (4709,6,5,'sid00001'),(4710,7,5,'sid00001'),(4711,8,5,'sid00001'),
+        (4802,1,1,'sid00002'),(4803,2,1,'sid00002'),(4804,3,1,'sid00002'),(4805,4,1,'sid00002'),(4806,5,1,'sid00002'),
+        (4808,1,1,'sid00003'),(4809,2,1,'sid00003'),(4810,3,1,'sid00003'),(4811,4,1,'sid00003'),
+        (4812,5,1,'sid00003'),(4813,6,1,'sid00003'),(4814,7,1,'sid00003'),(4815,8,1,'sid00003'),
+        (4817,1,2,'sid00003'),(4818,2,2,'sid00003'),(4819,3,2,'sid00003'),(4820,4,2,'sid00003'),
+        (4821,5,2,'sid00003'),(4822,6,2,'sid00003'),(4823,7,2,'sid00003'),(4824,8,2,'sid00003'),
+        (4827,1,3,'sid00003'),(4828,2,3,'sid00003'),(4829,3,3,'sid00003'),(4830,4,3,'sid00003'),
+        (4831,5,3,'sid00003'),(4832,6,3,'sid00003'),(4833,7,3,'sid00003'),(4834,8,3,'sid00003'),
+        (4836,1,4,'sid00003'),(4837,2,4,'sid00003'),(4838,3,4,'sid00003'),(4839,4,4,'sid00003'),
+        (4840,5,4,'sid00003'),(4841,6,4,'sid00003'),(4842,7,4,'sid00003'),(4843,8,4,'sid00003'),
+        (4844,9,4,'sid00003'),(4845,10,4,'sid00003'),
+    ]:
+        EPISODE_MSGS[(series_id, season, ep_num)] = msg_id
+
+    all_ids = list(MOVIE_MSGS.values()) + list(EPISODE_MSGS.values())
+    logger.info(f"Scanning {len(all_ids)} messages for file_ids...")
+
+    msg_data: dict[int, dict] = {}
+    try:
+        for i in range(0, len(all_ids), 100):
+            chunk = all_ids[i:i + 100]
+            msgs = await client.get_messages(GROUP_ID, chunk)
+            for m in (msgs if isinstance(msgs, list) else [msgs]):
+                if m and m.id and (m.video or m.document):
+                    media = m.video or m.document
+                    msg_data[m.id] = {
+                        "file_id": media.file_id,
+                        "file_size": getattr(media, "file_size", 0),
+                        "duration": getattr(media, "duration", 0),
+                    }
+    except Exception as e:
+        logger.error(f"scan_file_ids error: {e}")
+        raise HTTPException(500, f"Pyrogram get_messages failed: {e}")
+
+    conn = sq.connect(DB_PATH)
+    movies_updated = episodes_updated = 0
+    try:
+        for movie_id, msg_id in MOVIE_MSGS.items():
+            if msg_id in msg_data:
+                d = msg_data[msg_id]
+                conn.execute(
+                    "UPDATE movies SET file_id=?, file_size=?, duration=?, message_id=?, updated_at=datetime('now') WHERE id=?",
+                    (d["file_id"], d["file_size"], d["duration"], msg_id, movie_id)
+                )
+                movies_updated += 1
+
+        for (series_id, season, ep_num), msg_id in EPISODE_MSGS.items():
+            if msg_id in msg_data:
+                d = msg_data[msg_id]
+                conn.execute("""
+                    INSERT INTO episodes (series_id, season_number, episode_number, file_id, file_size, duration, message_id, topic_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+                    ON CONFLICT(series_id, season_number, episode_number) DO UPDATE SET
+                        file_id=excluded.file_id, file_size=excluded.file_size,
+                        duration=excluded.duration, message_id=excluded.message_id
+                """, (series_id, season, ep_num, d["file_id"], d["file_size"], d["duration"], msg_id))
+                episodes_updated += 1
+        conn.commit()
+    finally:
+        conn.close()
+
+    push_db_to_hf()
+    return {
+        "ok": True,
+        "messages_found": len(msg_data),
+        "movies_updated": movies_updated,
+        "episodes_updated": episodes_updated,
+    }
+
+
 # ── Frontend SPA ───────────────────────────────────────────────────────────────
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "..", "static")
 
