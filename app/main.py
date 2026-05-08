@@ -453,6 +453,29 @@ async def debug_dialogs():
     return {"private_group_id": PRIVATE_GROUP_ID, "clients": results}
 
 
+@app.get("/api/debug/forum-topics")
+async def debug_forum_topics():
+    """Test get_forum_topics on the private group."""
+    from app.stream import _pyro_clients
+    from app.config import PRIVATE_GROUP_ID
+    results = []
+    for i, pyro in enumerate(_pyro_clients):
+        info: dict = {"client": i, "topics": [], "error": None, "count": 0}
+        try:
+            count = 0
+            async for topic in pyro.get_forum_topics(PRIVATE_GROUP_ID):
+                count += 1
+                if count <= 5:
+                    info["topics"].append({"id": topic.id, "title": topic.title})
+                if count >= 50:
+                    break
+            info["count"] = count
+        except Exception as e:
+            info["error"] = f"{type(e).__name__}: {e}"
+        results.append(info)
+    return {"private_group_id": PRIVATE_GROUP_ID, "clients": results}
+
+
 @app.get("/api/debug/config")
 async def debug_config():
     """Show non-sensitive config values for diagnostics."""
