@@ -17,7 +17,11 @@ TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p"
 
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "@MLk_JAMAL")
-PRIVATE_GROUP_ID = int(os.getenv("PRIVATE_GROUP_ID", "0"))
+
+# Support both PRIVATE_GROUP_ID and PRIVATE_GROUPE_1_ID (historical typo)
+_raw_group = os.getenv("PRIVATE_GROUP_ID") or os.getenv("PRIVATE_GROUPE_1_ID", "0")
+PRIVATE_GROUP_ID = int(_raw_group or 0)
+
 PUBLIC_CHANNEL_ID = int(os.getenv("PUBLIC_CHANNEL_ID", "0"))
 
 SESSION_1_API_ID = int(os.getenv("SESSION_1_API_ID", "0"))
