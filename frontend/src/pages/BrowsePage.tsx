@@ -10,7 +10,7 @@ interface Props {
   goBack: () => void;
 }
 
-const LIMIT = 24;
+const LIMIT = 50;
 
 export default function BrowsePage({ type: initType = "movies", genre: initGenre, navigate }: Props) {
   const contentType = initType;

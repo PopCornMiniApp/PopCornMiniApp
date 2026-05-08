@@ -323,7 +323,7 @@ async def featured():
 
 @app.get("/api/movies")
 async def list_movies(
-    limit: int = Query(24, ge=1, le=100), offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0),
     genre: str = Query(None), search: str = Query(None),
     has_file: bool = Query(None), sort: str = Query("newest"),
 ):
