@@ -75,11 +75,18 @@ async def _cmd_fullscan(update, context):
     try:
         results = await run_full_scan(_pyro_clients[0])
         s = db.get_stats()
+        topics   = results["topics_scanned"]
+        new_reg  = results["registered"]
+        attached = results["files_attached"]
+        errors   = results["errors"]
+        movies_c = s["movies_count"]
+        series_c = s["series_count"]
+        eps_c    = s["episodes_count"]
         await msg.edit_text(
             f"✅ اكتمل المسح!\n\n"
-            f"📋 مواضيع: {results[\'topics_scanned\']} | ➕ جديد: {results[\'registered\']} | "
-            f"🎬 ملفات: {results[\'files_attached\']} | ⚠️ أخطاء: {results[\'errors\']}\n\n"
-            f"📊 المكتبة: {s[\'movies_count\']} فيلم | {s[\'series_count\']} مسلسل | {s[\'episodes_count\']} حلقة"
+            f"📋 مواضيع: {topics} | ➕ جديد: {new_reg} | "
+            f"🎬 ملفات: {attached} | ⚠️ أخطاء: {errors}\n\n"
+            f"📊 المكتبة: {movies_c} فيلم | {series_c} مسلسل | {eps_c} حلقة"
         )
     except Exception as e:
         await msg.edit_text(f"❌ خطأ: {str(e)[:300]}")
