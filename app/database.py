@@ -107,9 +107,17 @@ def _create_schema(conn: sqlite3.Connection):
             UNIQUE(series_id, season_number, episode_number)
         );
 
+        CREATE TABLE IF NOT EXISTS topic_series_map (
+            topic_id    INTEGER PRIMARY KEY,
+            series_id   TEXT NOT NULL,
+            FOREIGN KEY (series_id) REFERENCES series(id)
+        );
+
         CREATE INDEX IF NOT EXISTS idx_movies_tmdb ON movies(tmdb_id);
+        CREATE INDEX IF NOT EXISTS idx_movies_topic ON movies(topic_id);
         CREATE INDEX IF NOT EXISTS idx_series_tmdb ON series(tmdb_id);
         CREATE INDEX IF NOT EXISTS idx_episodes_series ON episodes(series_id, season_number);
+        CREATE INDEX IF NOT EXISTS idx_episodes_topic ON episodes(topic_id);
     """)
     conn.commit()
 
@@ -161,6 +169,22 @@ def get_movie(movie_id=None, tmdb_id=None):
         conn.close()
 
 
+def update_movie_file(movie_id: str, file_id: str, file_size: int, duration: int, message_id: int):
+    """Update only the file-related fields of an existing movie."""
+    conn = get_connection()
+    try:
+        conn.execute(
+            """UPDATE movies
+               SET file_id=?, file_size=?, duration=?, message_id=?, updated_at=datetime('now')
+               WHERE id=?""",
+            (file_id, file_size, duration, message_id, movie_id),
+        )
+        conn.commit()
+        logger.info(f"[db] Movie file updated: id={movie_id} file_id={file_id[:20]}…")
+    finally:
+        conn.close()
+
+
 def get_series_list(limit=20, offset=0, genre=None, search=None):
     conn = get_connection()
     try:
@@ -207,6 +231,47 @@ def get_episodes(series_id, season_number=None):
         conn.close()
 
 
+def get_episode(series_id: str, season_number: int, episode_number: int) -> dict | None:
+    """Fetch a single episode record."""
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT * FROM episodes WHERE series_id=? AND season_number=? AND episode_number=?",
+            (series_id, season_number, episode_number),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def update_episode_file(
+    series_id: str,
+    season_number: int,
+    episode_number: int,
+    file_id: str,
+    file_size: int,
+    duration: int,
+    message_id: int,
+    topic_id: int,
+):
+    """Update only the file-related fields of an existing episode."""
+    conn = get_connection()
+    try:
+        conn.execute(
+            """UPDATE episodes
+               SET file_id=?, file_size=?, duration=?, message_id=?, topic_id=?
+               WHERE series_id=? AND season_number=? AND episode_number=?""",
+            (file_id, file_size, duration, message_id, topic_id,
+             series_id, season_number, episode_number),
+        )
+        conn.commit()
+        logger.info(
+            f"[db] Episode file updated: {series_id} S{season_number:02d}E{episode_number:02d}"
+        )
+    finally:
+        conn.close()
+
+
 def upsert_movie(data: dict):
     conn = get_connection()
     try:
@@ -220,8 +285,11 @@ def upsert_movie(data: dict):
                 :director, :rating, :vote_count, :file_id, :file_size, :duration,
                 :topic_id, :message_id, datetime('now'))
             ON CONFLICT(id) DO UPDATE SET
-                file_id=excluded.file_id, file_size=excluded.file_size,
-                duration=excluded.duration, message_id=excluded.message_id,
+                file_id=COALESCE(excluded.file_id, file_id),
+                file_size=COALESCE(excluded.file_size, file_size),
+                duration=COALESCE(excluded.duration, duration),
+                message_id=COALESCE(excluded.message_id, message_id),
+                topic_id=COALESCE(excluded.topic_id, topic_id),
                 updated_at=datetime('now')
         """, data)
         conn.commit()
@@ -256,13 +324,29 @@ def upsert_episode(data: dict):
                 overview, still_path, air_date, runtime, file_id, file_unique_id,
                 file_size, duration, topic_id, message_id)
             VALUES (:series_id, :season_number, :episode_number, :title,
-                :overview, :still_path, :air_date, :runtime, :file_id, :file_unique_id,
-                :file_size, :duration, :topic_id, :message_id)
+                :overview, :still_path, :air_date, :runtime,
+                :file_id, :file_unique_id, :file_size, :duration, :topic_id, :message_id)
             ON CONFLICT(series_id, season_number, episode_number) DO UPDATE SET
-                file_id=excluded.file_id, file_unique_id=excluded.file_unique_id,
-                file_size=excluded.file_size, duration=excluded.duration,
-                message_id=excluded.message_id
+                file_id=COALESCE(excluded.file_id, file_id),
+                file_unique_id=COALESCE(excluded.file_unique_id, file_unique_id),
+                file_size=COALESCE(excluded.file_size, file_size),
+                duration=COALESCE(excluded.duration, duration),
+                message_id=COALESCE(excluded.message_id, message_id),
+                topic_id=COALESCE(excluded.topic_id, topic_id)
         """, data)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def set_topic_series_map(topic_id: int, series_id: str):
+    """Map a forum topic_id to a series_id for fast episode lookup."""
+    conn = get_connection()
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO topic_series_map (topic_id, series_id) VALUES (?, ?)",
+            (topic_id, series_id),
+        )
         conn.commit()
     finally:
         conn.close()
