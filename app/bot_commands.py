@@ -1,12 +1,13 @@
 """
 Bot command handlers for PopCorn main bot.
 Handles /start, /app, and admin commands.
+The main bot is ONLY a container for the Mini App — it does not send any media.
 """
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from telegram.ext import ContextTypes
-from app.config import ADMIN_ID, HF_SPACE_NAME
+from app.config import ADMIN_ID
 
-MINI_APP_URL = f"https://toolki-backend-popcorn.hf.space"
+MINI_APP_URL = "https://toolkit-backend-popcorn.hf.space"
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):

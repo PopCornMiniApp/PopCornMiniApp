@@ -265,8 +265,8 @@ async def admin_bulk_update_fileids(payload: dict):
     from app.config import DB_PATH
     import sqlite3 as sq
 
-    movies   = payload.get("movies", {})    # {movie_id: {file_id, file_size, duration, message_id}}
-    episodes = payload.get("episodes", {})  # {"sid_season_ep": {series_id, season, ep, file_id, ...}}
+    movies   = payload.get("movies", {})
+    episodes = payload.get("episodes", {})
 
     conn = sq.connect(DB_PATH)
     movies_updated = episodes_updated = 0
@@ -302,15 +302,21 @@ async def admin_bulk_update_fileids(payload: dict):
 
 @app.post("/api/admin/scan_file_ids")
 async def admin_scan_file_ids():
-    """Use Bot API forward_message to extract file_ids from all known historical messages.
-    forward_message returns a full Message object including video.file_id.
     """
-    from telegram import Bot
-    from app.config import MAIN_BOT_TOKEN, ADMIN_ID, PRIVATE_GROUP_ID, DB_PATH
+    Use Pyrogram MTProto to read messages directly from the private group
+    and extract file_ids WITHOUT forwarding anything to anyone.
+    This keeps the bot silent — it only reads, never writes.
+    """
+    from app.config import PRIVATE_GROUP_ID, DB_PATH
+    from app.stream import _pyro_clients
     import sqlite3 as sq
     import asyncio as aio
 
+    if not _pyro_clients:
+        raise HTTPException(503, "Pyrogram not available — cannot scan without MTProto")
+
     GROUP_ID = PRIVATE_GROUP_ID or -1003826837517
+    pyro = _pyro_clients[0]
 
     MOVIE_MSGS: dict[str, int] = {
         'mid00001': 4713, 'mid00002': 4715, 'mid00003': 4717,
@@ -347,44 +353,31 @@ async def admin_scan_file_ids():
     ]:
         EPISODE_MSGS[(series_id, season, ep_num)] = msg_id
 
-    bot = Bot(token=MAIN_BOT_TOKEN)
-    # Use ADMIN_ID as dump destination — forward returns full Message with file_id
-    DUMP_CHAT = ADMIN_ID if ADMIN_ID else GROUP_ID
+    # Collect all unique message IDs to fetch
+    all_msg_ids = list(set(MOVIE_MSGS.values()) | set(EPISODE_MSGS.values()))
 
     msg_data: dict[int, dict] = {}
 
-    async def forward_one(msg_id: int):
+    async def fetch_one(msg_id: int):
+        """Read message directly from group via Pyrogram — no forwarding."""
         try:
-            m = await bot.forward_message(
-                chat_id=DUMP_CHAT,
-                from_chat_id=GROUP_ID,
-                message_id=msg_id,
-                protect_content=False,
-            )
-            media = m.video or m.document or m.audio
+            msg = await pyro.get_messages(GROUP_ID, msg_id)
+            media = msg.video or msg.document or msg.audio
             if media:
                 msg_data[msg_id] = {
-                    "file_id": media.file_id,
+                    "file_id":   media.file_id,
                     "file_size": getattr(media, "file_size", 0) or 0,
-                    "duration": getattr(media, "duration", 0) or 0,
+                    "duration":  getattr(media, "duration", 0) or 0,
                 }
-                logger.info(f"Got file_id for msg {msg_id}: {media.file_id[:20]}...")
+                logger.info(f"📥 Got file_id for msg {msg_id}: {media.file_id[:20]}…")
         except Exception as e:
-            logger.warning(f"forward msg {msg_id} failed: {e}")
+            logger.warning(f"fetch msg {msg_id} failed: {e}")
 
-    all_movie_ids  = list(MOVIE_MSGS.values())
-    all_episode_ids = list(EPISODE_MSGS.values())
-
-    # Forward movies in chunks (respect rate limit)
-    for i in range(0, len(all_movie_ids), 5):
-        chunk = all_movie_ids[i:i+5]
-        await aio.gather(*[forward_one(mid) for mid in chunk])
-        await aio.sleep(0.5)
-
-    for i in range(0, len(all_episode_ids), 5):
-        chunk = all_episode_ids[i:i+5]
-        await aio.gather(*[forward_one(mid) for mid in chunk])
-        await aio.sleep(0.5)
+    # Fetch in batches of 10 (Pyrogram handles MTProto internally)
+    for i in range(0, len(all_msg_ids), 10):
+        chunk = all_msg_ids[i:i+10]
+        await aio.gather(*[fetch_one(mid) for mid in chunk])
+        await aio.sleep(0.3)
 
     conn = sq.connect(DB_PATH)
     movies_updated = episodes_updated = 0
@@ -431,9 +424,9 @@ if os.path.isdir(STATIC_DIR):
         app.mount("/assets", StaticFiles(directory=_assets), name="assets")
 
     @app.get("/{full_path:path}")
-    async def spa(_: str):
+    async def spa(full_path: str):
         idx = os.path.join(STATIC_DIR, "index.html")
-        return FileResponse(idx) if os.path.isfile(idx) else JSONResponse({"error": "Frontend not built"}, 503)
+        return FileResponse(idx) if os.path.isfile(idx) else JSONResponse({"error": "Frontend not built"}, status_code=503)
 else:
     @app.get("/")
     async def root():
