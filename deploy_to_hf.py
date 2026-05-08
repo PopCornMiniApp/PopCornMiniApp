@@ -7,10 +7,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-HF_TOKEN = os.environ.get("HF_TOKEN", "hf_IhJRdrSoWfAZZUgRdhUNqxPfTFzofxaBS")
+HF_TOKEN = os.environ.get("HF_TOKEN", "")
 HF_SPACE = "ToolKit-backend/PopCorn"
 HF_DATASET = "ToolKit-backend/PopCornDB"
 SCRIPT_DIR = Path(__file__).parent
+MINI_APP_URL = "https://toolkit-backend-popcorn.hf.space"
 
 
 def run(cmd, cwd=None):
@@ -26,7 +27,14 @@ def build_frontend():
     frontend_dir = SCRIPT_DIR / "frontend"
     run("npm install", cwd=frontend_dir)
     run("npm run build", cwd=frontend_dir)
-    print("✅ Frontend built successfully")
+    # Copy built files to static/
+    import shutil
+    dist = frontend_dir / "dist"
+    static = SCRIPT_DIR / "static"
+    if static.exists():
+        shutil.rmtree(static)
+    shutil.copytree(dist, static)
+    print("✅ Frontend built and copied to static/")
 
 
 def push_to_space():
@@ -34,37 +42,19 @@ def push_to_space():
     from huggingface_hub import HfApi
     api = HfApi(token=HF_TOKEN)
 
-    space_dir = SCRIPT_DIR
-
-    ignore = {".git", "node_modules", "__pycache__", ".env", "*.pyc", "*.egg-info"}
-
-    def iter_files(base: Path, prefix=""):
-        for item in sorted(base.iterdir()):
-            if item.name in ignore or item.name.startswith("."):
-                continue
-            if item.is_file():
-                yield item, prefix + item.name
-            elif item.is_dir():
-                yield from iter_files(item, prefix + item.name + "/")
-
-    print(f"Uploading files to {HF_SPACE}...")
-    files_to_upload = []
-    for local_path, repo_path in iter_files(space_dir):
-        if "frontend/node_modules" in str(local_path) or "frontend/src" in str(local_path):
-            continue
-        files_to_upload.append((str(local_path), repo_path))
-
+    print(f"Uploading to {HF_SPACE}...")
     api.upload_folder(
-        folder_path=str(space_dir),
+        folder_path=str(SCRIPT_DIR),
         repo_id=HF_SPACE,
         repo_type="space",
         token=HF_TOKEN,
         ignore_patterns=[
             "*.pyc", "__pycache__", ".git", "node_modules",
             "frontend/src", "frontend/node_modules", "frontend/public",
-            ".env", "*.egg-info", "deploy_to_hf.py",
+            ".env", "*.egg-info", "deploy_to_hf.py", "dataset_readme.md",
+            "frontend/dist",
         ],
-        commit_message="🍿 Deploy PopCorn Mini App",
+        commit_message="🍿 PopCorn v3.1 — bug fixes & streaming improvements",
     )
     print(f"✅ Pushed to https://huggingface.co/spaces/{HF_SPACE}")
 
@@ -105,20 +95,20 @@ Contains movies, series, and episodes synced from Telegram private group.
 def set_space_secrets():
     print("\n=== Setting Space Secrets ===")
     secrets = {
-        "HF_TOKEN": HF_TOKEN,
-        "HF_DATASET_NAME": HF_DATASET,
-        "HF_SPACE_NAME": HF_SPACE,
-        "MAIN_BOT_TOKEN": os.environ.get("MAIN_BOT_TOKEN", ""),
-        "STREAM_BOT_1": os.environ.get("STREAM_BOT_1", ""),
-        "STREAM_BOT_2": os.environ.get("STREAM_BOT_2", ""),
-        "TMDB_API_KEY": os.environ.get("TMDB_API_KEY", ""),
-        "ADMIN_ID": os.environ.get("ADMIN_ID", ""),
-        "ADMIN_USERNAME": os.environ.get("ADMIN_USERNAME", ""),
-        "PRIVATE_GROUP_ID": os.environ.get("PRIVATE_GROUP_ID", ""),
-        "PUBLIC_CHANNEL_ID": os.environ.get("PUBLIC_CHANNEL_ID", ""),
-        "SESSION_1_API_ID": os.environ.get("SESSION_1_API_ID", ""),
+        "HF_TOKEN":           HF_TOKEN,
+        "HF_DATASET_NAME":    HF_DATASET,
+        "HF_SPACE_NAME":      HF_SPACE,
+        "MAIN_BOT_TOKEN":     os.environ.get("MAIN_BOT_TOKEN", ""),
+        "STREAM_BOT_1":       os.environ.get("STREAM_BOT_1", ""),
+        "STREAM_BOT_2":       os.environ.get("STREAM_BOT_2", ""),
+        "TMDB_API_KEY":       os.environ.get("TMDB_API_KEY", ""),
+        "ADMIN_ID":           os.environ.get("ADMIN_ID", ""),
+        "ADMIN_USERNAME":     os.environ.get("ADMIN_USERNAME", ""),
+        "PRIVATE_GROUP_ID":   os.environ.get("PRIVATE_GROUP_ID") or os.environ.get("PRIVATE_GROUPE_1_ID", ""),
+        "PUBLIC_CHANNEL_ID":  os.environ.get("PUBLIC_CHANNEL_ID", ""),
+        "SESSION_1_API_ID":   os.environ.get("SESSION_1_API_ID", ""),
         "SESSION_1_API_HASH": os.environ.get("SESSION_1_API_HASH", ""),
-        "SESSION_2_API_ID": os.environ.get("SESSION_2_API_ID", ""),
+        "SESSION_2_API_ID":   os.environ.get("SESSION_2_API_ID", ""),
         "SESSION_2_API_HASH": os.environ.get("SESSION_2_API_HASH", ""),
     }
     from huggingface_hub import HfApi
@@ -129,12 +119,12 @@ def set_space_secrets():
                 api.add_space_secret(repo_id=HF_SPACE, key=key, value=value, token=HF_TOKEN)
                 print(f"  ✅ Secret set: {key}")
             except Exception as e:
-                print(f"  ⚠️ Could not set {key}: {e}")
+                print(f"  ⚠️  Could not set {key}: {e}")
 
 
 if __name__ == "__main__":
-    print("🍿 PopCorn - HuggingFace Deployment")
-    print("=" * 40)
+    print("🍿 PopCorn — HuggingFace Deployment v3.1")
+    print("=" * 45)
 
     try:
         from huggingface_hub import HfApi
@@ -147,8 +137,8 @@ if __name__ == "__main__":
     set_space_secrets()
     push_to_space()
 
-    print("\n" + "=" * 40)
+    print("\n" + "=" * 45)
     print("🎉 Deployment complete!")
-    print(f"🌐 Mini App URL: https://toolki t-backend-popcorn.hf.space")
+    print(f"🌐 Mini App URL: {MINI_APP_URL}")
     print(f"🤖 Set this URL in BotFather as the Mini App URL")
-    print("=" * 40)
+    print("=" * 45)
