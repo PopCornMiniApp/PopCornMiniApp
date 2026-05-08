@@ -16,35 +16,63 @@ def get_connection() -> sqlite3.Connection:
 
 
 def init_db():
-    """Download DB from HF Dataset only if local DB doesn't exist or is old."""
+    """Initialize database with smart sync logic to prevent data loss."""
     import time
+    import sqlite3
     
-    # Check if local database exists and is recent (less than 24 hours old)
+    # Check if local database exists and get its info
     db_exists = os.path.exists(DB_PATH)
-    db_is_recent = False
+    local_count = 0
     
     if db_exists:
         db_age_hours = (time.time() - os.path.getmtime(DB_PATH)) / 3600
-        db_is_recent = db_age_hours < 24
-        logger.info(f"Local database exists (age: {db_age_hours:.1f} hours)")
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            local_count = cursor.execute("SELECT COUNT(*) FROM movies").fetchone()[0]
+            conn.close()
+            logger.info(f"Local DB: {local_count} movies, age: {db_age_hours:.1f}h")
+        except Exception as e:
+            logger.warning(f"Could not read local DB: {e}")
+            local_count = 0
     
-    # Only download from HuggingFace if DB doesn't exist or is old
-    if not db_exists or not db_is_recent:
+    # Download from HuggingFace if local doesn't exist or is old (>24h)
+    should_download = not db_exists or (db_exists and (time.time() - os.path.getmtime(DB_PATH)) / 3600 > 24)
+    
+    if should_download:
         try:
             logger.info("Downloading database from HuggingFace...")
-            local_path = hf_hub_download(
+            hf_path = hf_hub_download(
                 repo_id=HF_DATASET_NAME,
                 filename=DATASET_DB_FILE,
                 repo_type="dataset",
                 token=HF_TOKEN,
-                local_dir="/tmp",
+                force_download=True
             )
-            logger.info(f"Downloaded DB from HuggingFace: {local_path}")
-            if local_path != DB_PATH:
-                import shutil
-                shutil.copy(local_path, DB_PATH)
+            
+            # Check HuggingFace database content
+            conn = sqlite3.connect(hf_path)
+            cursor = conn.cursor()
+            hf_count = cursor.execute("SELECT COUNT(*) FROM movies").fetchone()[0]
+            conn.close()
+            
+            logger.info(f"HuggingFace DB: {hf_count} movies")
+            
+            # Smart decision: only use HF version if it has more or equal data
+            if hf_count >= local_count:
+                logger.info(f"Using HuggingFace DB ({hf_count} >= {local_count})")
+                if hf_path != DB_PATH:
+                    import shutil
+                    shutil.copy(hf_path, DB_PATH)
+            else:
+                logger.warning(f"⚠️  HuggingFace has LESS data ({hf_count} < {local_count})")
+                logger.warning(f"Keeping local database to prevent data loss")
+                logger.info(f"Consider uploading local DB to HuggingFace")
+                
         except Exception as e:
-            logger.warning(f"Could not download DB from HF (will create fresh): {e}")
+            logger.warning(f"Could not download from HuggingFace: {e}")
+            if not db_exists:
+                logger.info("Will create fresh database")
     else:
         logger.info(f"Using existing local database: {DB_PATH}")
 
