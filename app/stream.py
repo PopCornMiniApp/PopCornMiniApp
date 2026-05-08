@@ -134,6 +134,15 @@ async def init_pyrogram():
                 sleep_threshold=60,
             )
             await client.start()
+            # Resolve private group peer to cache it (required before get_messages/get_chat_history)
+            if PRIVATE_GROUP_ID:
+                try:
+                    await asyncio.wait_for(
+                        client.resolve_peer(PRIVATE_GROUP_ID), timeout=15
+                    )
+                    logger.info("✅ Pyrogram client '%s' resolved private group peer", name)
+                except Exception as pe:
+                    logger.warning("Pyrogram client '%s' could not resolve private group peer: %s", name, pe)
             _pyro_clients.append(client)
             logger.info("✅ Pyrogram client '%s' started", name)
         except Exception as exc:
