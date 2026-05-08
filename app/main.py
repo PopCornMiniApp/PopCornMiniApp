@@ -490,6 +490,16 @@ async def debug_forum_topics():
     return {"private_group_id": PRIVATE_GROUP_ID, "clients": results}
 
 
+@app.get("/api/debug/pyro-errors")
+async def debug_pyro_errors():
+    """Show Pyrogram startup errors for diagnostics."""
+    from app.stream import _pyro_start_errors, _pyro_clients
+    return {
+        "clients_running": len(_pyro_clients),
+        "startup_errors": _pyro_start_errors,
+    }
+
+
 @app.get("/api/debug/config")
 async def debug_config():
     """Show non-sensitive config values for diagnostics."""
