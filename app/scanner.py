@@ -5,7 +5,7 @@ to register missing movies/series and attach missing file_ids.
 import re, logging, sqlite3
 from app.config import PRIVATE_GROUP_ID, DB_PATH
 from app import database as db
-from app.database import push_db_to_hf
+from app.database import push_db_to_hf, set_topic_series_map
 from app.tmdb import fetch_movie, fetch_series, fetch_episode_info
 from app.cache import cache_clear_all
 
@@ -28,16 +28,23 @@ def _parse_topic(name: str) -> dict | None:
 
 
 async def _ensure_registered(parsed: dict, topic_id: int) -> bool:
+    """Register a movie/series if not already in DB. Returns True if newly added."""
     if parsed["type"] == "movie":
         if db.get_movie(movie_id=parsed["internal_id"]): return False
         tmdb = await fetch_movie(parsed["tmdb_id"])
         if not tmdb: return False
-        db.upsert_movie({"id": parsed["internal_id"], "topic_id": topic_id,
-                         "message_id": None, "file_id": None, "file_size": None, "duration": None, **tmdb})
+        db.upsert_movie({
+            "id": parsed["internal_id"], "topic_id": topic_id,
+            "message_id": None, "file_id": None, "file_size": None, "duration": None,
+            **tmdb,
+        })
         logger.info(f"[scanner] Registered movie: {tmdb['title']}")
         return True
     elif parsed["type"] == "series":
-        if db.get_series(series_id=parsed["internal_id"]): return False
+        already = db.get_series(series_id=parsed["internal_id"])
+        # Always refresh the topic→series map (even if series already exists)
+        set_topic_series_map(topic_id, parsed["internal_id"])
+        if already: return False
         tmdb = await fetch_series(parsed["tmdb_id"])
         if not tmdb: return False
         db.upsert_series({"id": parsed["internal_id"], **tmdb})
@@ -57,21 +64,23 @@ def _movie_by_topic(topic_id: int) -> dict | None:
 def _series_by_topic(topic_id: int) -> dict | None:
     conn = sqlite3.connect(DB_PATH); conn.row_factory = sqlite3.Row
     try:
+        # Try topic_series_map first
+        try:
+            row = conn.execute(
+                "SELECT s.* FROM series s "
+                "INNER JOIN topic_series_map t ON t.series_id=s.id "
+                "WHERE t.topic_id=?", (topic_id,)
+            ).fetchone()
+            if row: return dict(row)
+        except sqlite3.OperationalError:
+            pass
+        # Fallback via episodes
         row = conn.execute(
             "SELECT s.* FROM series s "
             "INNER JOIN episodes e ON e.series_id=s.id "
             "WHERE e.topic_id=? LIMIT 1", (topic_id,)
         ).fetchone()
-        if row: return dict(row)
-        try:
-            row2 = conn.execute(
-                "SELECT s.* FROM series s "
-                "INNER JOIN topic_series_map t ON t.series_id=s.id "
-                "WHERE t.topic_id=?", (topic_id,)
-            ).fetchone()
-            return dict(row2) if row2 else None
-        except sqlite3.OperationalError:
-            return None
+        return dict(row) if row else None
     finally: conn.close()
 
 
@@ -103,17 +112,25 @@ async def _process_file_message(message, topic_id: int) -> bool:
         if not existing:
             ep_meta = await fetch_episode_info(series.get("tmdb_id"), s_num, e_num)
             db.upsert_episode({
-                "series_id": series["id"], "season_number": s_num, "episode_number": e_num,
+                "series_id": series["id"],
+                "season_number": s_num,
+                "episode_number": e_num,
                 "title": ep_meta.get("title", f"الحلقة {e_num}") if ep_meta else f"الحلقة {e_num}",
                 "overview": ep_meta.get("overview", "") if ep_meta else "",
                 "still_path": ep_meta.get("still_path", "") if ep_meta else "",
                 "air_date": ep_meta.get("air_date", "") if ep_meta else "",
                 "runtime": ep_meta.get("runtime", 0) if ep_meta else 0,
+                "file_id": file_id,
+                "file_unique_id": getattr(file_obj, "file_unique_id", None),
+                "file_size": file_size,
+                "duration": duration,
                 "topic_id": topic_id,
+                "message_id": msg_id,
             })
         elif existing.get("file_id"):
             return False  # already attached
-        db.update_episode_file(series["id"], s_num, e_num, file_id, file_size, duration, msg_id, topic_id)
+        else:
+            db.update_episode_file(series["id"], s_num, e_num, file_id, file_size, duration, msg_id, topic_id)
         logger.info(f"[scanner] Episode: {series['title']} S{s_num:02d}E{e_num:02d}")
         return True
     return False
@@ -137,7 +154,6 @@ async def run_full_scan(pyro_client) -> dict:
     except Exception as e:
         logger.error(f"[scanner] get_forum_topics: {e}")
         results["errors"] += 1
-        # Don't abort — still try to scan messages below
 
     # Build map: topic_id → parsed info
     topic_map: dict[int, dict] = {}
@@ -156,9 +172,11 @@ async def run_full_scan(pyro_client) -> dict:
 
     # ── Step 2: Iterate recent messages, attach missing files ─────────────────
     try:
-        async for message in pyro_client.get_chat_history(PRIVATE_GROUP_ID, limit=2000):
-            # Each forum-topic message has message_thread_id set to topic's first msg id
-            tid = getattr(message, "message_thread_id", None) or getattr(message, "reply_to_top_id", None)
+        async for message in pyro_client.get_chat_history(PRIVATE_GROUP_ID, limit=3000):
+            tid = (
+                getattr(message, "message_thread_id", None)
+                or getattr(message, "reply_to_top_id", None)
+            )
             if not tid: continue
             if not (message.video or message.document): continue
             if not (message.caption or ""): continue
