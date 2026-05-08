@@ -95,6 +95,55 @@ def _next_client():
     return c
 
 
+def _restore_sessions():
+    """Download Pyrogram session files from HF Dataset so peers are pre-cached."""
+    try:
+        from huggingface_hub import hf_hub_download
+        from app.config import HF_TOKEN, HF_DATASET_NAME
+        for name in ("main", "s1", "s2"):
+            fname = f"popcorn_{name}.session"
+            try:
+                local = hf_hub_download(
+                    repo_id=HF_DATASET_NAME,
+                    filename=fname,
+                    repo_type="dataset",
+                    token=HF_TOKEN,
+                    local_dir="/tmp",
+                )
+                if local != f"/tmp/{fname}":
+                    import shutil
+                    shutil.copy(local, f"/tmp/{fname}")
+                logger.info("📥 Restored Pyrogram session: %s", fname)
+            except Exception:
+                pass  # File may not exist yet — that's fine
+    except Exception as e:
+        logger.warning("Session restore skipped: %s", e)
+
+
+def _persist_sessions():
+    """Upload Pyrogram session files to HF Dataset for next restart."""
+    try:
+        from huggingface_hub import HfApi
+        from app.config import HF_TOKEN, HF_DATASET_NAME
+        api = HfApi(token=HF_TOKEN)
+        for name in ("main", "s1", "s2"):
+            fpath = f"/tmp/popcorn_{name}.session"
+            if os.path.exists(fpath) and os.path.getsize(fpath) > 0:
+                try:
+                    api.upload_file(
+                        path_or_fileobj=fpath,
+                        path_in_repo=f"popcorn_{name}.session",
+                        repo_id=HF_DATASET_NAME,
+                        repo_type="dataset",
+                        token=HF_TOKEN,
+                    )
+                    logger.info("📤 Persisted Pyrogram session: %s", name)
+                except Exception as ue:
+                    logger.warning("Session persist '%s' failed: %s", name, ue)
+    except Exception as e:
+        logger.warning("Session persist skipped: %s", e)
+
+
 async def init_pyrogram():
     global _pyro_clients
 
@@ -107,6 +156,9 @@ async def init_pyrogram():
     except ImportError:
         logger.warning("Pyrogram not installed — streaming limited to ≤20 MB")
         return
+
+    # Restore session files from HF Dataset (contains cached peer access_hashes)
+    _restore_sessions()
 
     # ── Session list ────────────────────────────────────────────────────────
     # MAIN_BOT_TOKEN FIRST — it is definitely a member of PRIVATE_GROUP_ID
@@ -122,6 +174,7 @@ async def init_pyrogram():
                          SESSION_2_API_ID or SESSION_1_API_ID,
                          SESSION_2_API_HASH or SESSION_1_API_HASH, "s2"))
 
+    any_resolved = False
     for token, api_id, api_hash, name in sessions:
         try:
             client = Client(
@@ -134,26 +187,40 @@ async def init_pyrogram():
                 sleep_threshold=60,
             )
             await client.start()
-            # Cache the private group peer so get_messages / get_chat_history work.
-            # get_chat() fetches and stores the access_hash — resolve_peer alone is not enough.
-            if PRIVATE_GROUP_ID:
-                try:
-                    chat = await asyncio.wait_for(
-                        client.get_chat(PRIVATE_GROUP_ID), timeout=20
-                    )
-                    logger.info(
-                        "✅ Pyrogram client '%s' cached private group: %s",
-                        name, getattr(chat, "title", PRIVATE_GROUP_ID)
-                    )
-                except Exception as pe:
+
+            # Populate peer cache by fetching all dialogs (groups/chats the bot is in).
+            # This is the only reliable way for a fresh session to discover group peers.
+            group_found = False
+            try:
+                async for dialog in client.get_dialogs():
+                    chat = dialog.chat
+                    cid = getattr(chat, "id", None)
+                    if cid and abs(cid) == abs(PRIVATE_GROUP_ID):
+                        group_found = True
+                        logger.info(
+                            "✅ Pyrogram client '%s' found private group: %s",
+                            name, getattr(chat, "title", cid)
+                        )
+                        break
+                if not group_found:
                     logger.warning(
-                        "Pyrogram client '%s' cannot access private group %s: %s",
-                        name, PRIVATE_GROUP_ID, pe
+                        "Pyrogram client '%s': private group not found in dialogs — "
+                        "is the bot a member of group %s?",
+                        name, PRIVATE_GROUP_ID
                     )
+            except Exception as de:
+                logger.warning("Pyrogram client '%s' get_dialogs failed: %s", name, de)
+
             _pyro_clients.append(client)
-            logger.info("✅ Pyrogram client '%s' started", name)
+            if group_found:
+                any_resolved = True
+            logger.info("✅ Pyrogram client '%s' started (group_found=%s)", name, group_found)
         except Exception as exc:
             logger.error("Pyrogram client '%s' failed: %s", name, exc)
+
+    # Persist sessions to HF Dataset so next restart has cached peers
+    if any_resolved:
+        _persist_sessions()
 
 
 async def stop_pyrogram():
