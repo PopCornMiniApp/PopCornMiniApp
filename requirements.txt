@@ -1,0 +1,17 @@
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+python-telegram-bot==21.9
+pyrogram==2.0.106
+TgCrypto==1.2.5
+httpx==0.28.1
+huggingface-hub==0.27.1
+datasets==3.2.0
+aiofiles==24.1.0
+python-multipart==0.0.20
+pydantic==2.10.4
+aiohttp==3.11.11
+tmdbsimple==2.9.1
+Pillow==11.1.0
+python-dotenv==1.0.1
+apscheduler==3.10.4
+cachetools==5.5.0
