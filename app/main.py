@@ -668,6 +668,391 @@ async def admin_fullscan(request: Request):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# Admin Dashboard Endpoints
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/admin/stats")
+@require_admin
+async def admin_get_stats(request: Request):
+    """Get comprehensive admin statistics."""
+    from app.database import get_admin_stats
+    
+    client_ip = request.client.host if request.client else "unknown"
+    db.log_admin_action(
+        admin_id=ADMIN_ID,
+        action_type="view_stats",
+        ip_address=client_ip
+    )
+    
+    return get_admin_stats()
+
+
+@app.get("/api/admin/users")
+@require_admin
+async def admin_get_users(
+    request: Request,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    search: str = Query(None),
+    blocked_only: bool = Query(False)
+):
+    """Get all users with filtering."""
+    from app.database import get_all_users
+    
+    result = get_all_users(
+        limit=limit,
+        offset=offset,
+        search=search,
+        blocked_only=blocked_only
+    )
+    
+    return result
+
+
+@app.get("/api/admin/users/{user_id}")
+@require_admin
+async def admin_get_user(request: Request, user_id: int):
+    """Get specific user details."""
+    from app.database import get_user
+    
+    user = get_user(user_id)
+    if not user:
+        raise HTTPException(404, "User not found")
+    
+    return user
+
+
+@app.post("/api/admin/users/{user_id}/block")
+@require_admin
+async def admin_block_user(request: Request, user_id: int):
+    """Block a user."""
+    from app.database import block_user, log_admin_action
+    
+    client_ip = request.client.host if request.client else "unknown"
+    
+    try:
+        block_user(user_id, blocked=True)
+        log_admin_action(
+            admin_id=ADMIN_ID,
+            action_type="block_user",
+            target_type="user",
+            target_id=str(user_id),
+            ip_address=client_ip,
+            status="success"
+        )
+        cache_clear_prefix("user_")
+        return {"ok": True, "message": f"User {user_id} blocked"}
+    except Exception as e:
+        log_admin_action(
+            admin_id=ADMIN_ID,
+            action_type="block_user",
+            target_type="user",
+            target_id=str(user_id),
+            ip_address=client_ip,
+            status="failed",
+            action_details=str(e)
+        )
+        raise HTTPException(500, f"Failed to block user: {str(e)}")
+
+
+@app.post("/api/admin/users/{user_id}/unblock")
+@require_admin
+async def admin_unblock_user(request: Request, user_id: int):
+    """Unblock a user."""
+    from app.database import block_user, log_admin_action
+    
+    client_ip = request.client.host if request.client else "unknown"
+    
+    try:
+        block_user(user_id, blocked=False)
+        log_admin_action(
+            admin_id=ADMIN_ID,
+            action_type="unblock_user",
+            target_type="user",
+            target_id=str(user_id),
+            ip_address=client_ip,
+            status="success"
+        )
+        cache_clear_prefix("user_")
+        return {"ok": True, "message": f"User {user_id} unblocked"}
+    except Exception as e:
+        log_admin_action(
+            admin_id=ADMIN_ID,
+            action_type="unblock_user",
+            target_type="user",
+            target_id=str(user_id),
+            ip_address=client_ip,
+            status="failed",
+            action_details=str(e)
+        )
+        raise HTTPException(500, f"Failed to unblock user: {str(e)}")
+
+
+@app.delete("/api/admin/users/{user_id}")
+@require_admin
+async def admin_delete_user(request: Request, user_id: int):
+    """Delete a user and all related data."""
+    from app.database import delete_user, log_admin_action
+    
+    client_ip = request.client.host if request.client else "unknown"
+    
+    try:
+        delete_user(user_id)
+        log_admin_action(
+            admin_id=ADMIN_ID,
+            action_type="delete_user",
+            target_type="user",
+            target_id=str(user_id),
+            ip_address=client_ip,
+            status="success"
+        )
+        cache_clear_prefix("user_")
+        return {"ok": True, "message": f"User {user_id} deleted"}
+    except Exception as e:
+        log_admin_action(
+            admin_id=ADMIN_ID,
+            action_type="delete_user",
+            target_type="user",
+            target_id=str(user_id),
+            ip_address=client_ip,
+            status="failed",
+            action_details=str(e)
+        )
+        raise HTTPException(500, f"Failed to delete user: {str(e)}")
+
+
+@app.get("/api/admin/content")
+@require_admin
+async def admin_get_content(
+    request: Request,
+    content_type: str = Query("movie", regex="^(movie|series)$"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    search: str = Query(None),
+    has_file: bool = Query(None)
+):
+    """Get content (movies or series) for admin management."""
+    if content_type == "movie":
+        items = db.get_movies(limit=limit, offset=offset, search=search)
+        total = db.get_connection().execute(
+            "SELECT COUNT(*) FROM movies" + (" WHERE title LIKE ? OR title_ar LIKE ?" if search else ""),
+            [f"%{search}%", f"%{search}%"] if search else []
+        ).fetchone()[0]
+    else:
+        items = db.get_series_list(limit=limit, offset=offset, search=search)
+        total = db.get_connection().execute(
+            "SELECT COUNT(*) FROM series" + (" WHERE title LIKE ? OR title_ar LIKE ?" if search else ""),
+            [f"%{search}%", f"%{search}%"] if search else []
+        ).fetchone()[0]
+    
+    for item in items:
+        _j(item, ["genres", "cast"])
+        if content_type == "movie":
+            item["has_file"] = bool(item.get("file_id"))
+    
+    return {"items": items, "total": total, "content_type": content_type}
+
+
+@app.delete("/api/admin/content/{content_type}/{content_id}")
+@require_admin
+async def admin_delete_content(
+    request: Request,
+    content_type: str,
+    content_id: str
+):
+    """Delete movie or series."""
+    from app.database import delete_content, log_admin_action
+    
+    if content_type not in ["movie", "series"]:
+        raise HTTPException(400, "Invalid content type")
+    
+    client_ip = request.client.host if request.client else "unknown"
+    
+    try:
+        delete_content(content_type, content_id)
+        log_admin_action(
+            admin_id=ADMIN_ID,
+            action_type=f"delete_{content_type}",
+            target_type=content_type,
+            target_id=content_id,
+            ip_address=client_ip,
+            status="success"
+        )
+        cache_clear_all()
+        return {"ok": True, "message": f"{content_type.capitalize()} {content_id} deleted"}
+    except Exception as e:
+        log_admin_action(
+            admin_id=ADMIN_ID,
+            action_type=f"delete_{content_type}",
+            target_type=content_type,
+            target_id=content_id,
+            ip_address=client_ip,
+            status="failed",
+            action_details=str(e)
+        )
+        raise HTTPException(500, f"Failed to delete {content_type}: {str(e)}")
+
+
+@app.get("/api/admin/audit-logs")
+@require_admin
+async def admin_get_audit_logs(
+    request: Request,
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    action_type: str = Query(None),
+    start_date: str = Query(None),
+    end_date: str = Query(None)
+):
+    """Get audit logs with filtering."""
+    from app.database import get_audit_logs
+    
+    result = get_audit_logs(
+        limit=limit,
+        offset=offset,
+        admin_id=None,
+        action_type=action_type,
+        start_date=start_date,
+        end_date=end_date
+    )
+    
+    return result
+
+
+@app.get("/api/admin/notifications")
+@require_admin
+async def admin_get_notifications(
+    request: Request,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    status: str = Query(None)
+):
+    """Get notifications."""
+    from app.database import get_notifications
+    
+    result = get_notifications(limit=limit, offset=offset, status=status)
+    return result
+
+
+@app.post("/api/admin/notifications")
+@require_admin
+async def admin_create_notification(request: Request, payload: dict):
+    """Create a new notification."""
+    from app.database import create_notification, log_admin_action
+    
+    title = payload.get("title")
+    message = payload.get("message")
+    target_type = payload.get("target_type", "all")
+    target_ids = payload.get("target_ids")
+    scheduled_at = payload.get("scheduled_at")
+    
+    if not title or not message:
+        raise HTTPException(400, "Title and message are required")
+    
+    client_ip = request.client.host if request.client else "unknown"
+    
+    try:
+        notification_id = create_notification(
+            title=title,
+            message=message,
+            target_type=target_type,
+            target_ids=target_ids,
+            scheduled_at=scheduled_at,
+            created_by=ADMIN_ID
+        )
+        
+        log_admin_action(
+            admin_id=ADMIN_ID,
+            action_type="create_notification",
+            action_details=f"Title: {title}",
+            ip_address=client_ip,
+            status="success"
+        )
+        
+        return {"ok": True, "notification_id": notification_id}
+    except Exception as e:
+        log_admin_action(
+            admin_id=ADMIN_ID,
+            action_type="create_notification",
+            ip_address=client_ip,
+            status="failed",
+            action_details=str(e)
+        )
+        raise HTTPException(500, f"Failed to create notification: {str(e)}")
+
+
+@app.get("/api/admin/bot-status")
+@require_admin
+async def admin_get_bot_status(request: Request):
+    """Get status of all bots."""
+    from app.database import get_bot_statuses
+    from app.stream import _pyro_clients
+    
+    # Get stored bot statuses
+    statuses = get_bot_statuses()
+    
+    # Add current Pyrogram status
+    pyrogram_status = {
+        "bot_name": "Pyrogram Clients",
+        "bot_type": "streaming",
+        "status": "active" if _pyro_clients else "inactive",
+        "clients_count": len(_pyro_clients),
+        "last_check": time.strftime("%Y-%m-%d %H:%M:%S")
+    }
+    
+    return {
+        "pyrogram": pyrogram_status,
+        "bots": statuses
+    }
+
+
+@app.get("/api/admin/sync-status")
+@require_admin
+async def admin_get_sync_status(request: Request):
+    """Get current sync status."""
+    from app.database import get_sync_status
+    
+    sync_status = get_sync_status()
+    stats = db.get_stats()
+    
+    return {
+        "sync_status": sync_status,
+        "stats": stats
+    }
+
+
+@app.post("/api/admin/sync-db")
+@require_admin
+async def admin_sync_db(request: Request):
+    """Manually trigger database sync to HuggingFace."""
+    from app.database import push_db_to_hf, log_admin_action
+    
+    client_ip = request.client.host if request.client else "unknown"
+    
+    try:
+        push_db_to_hf()
+        cache_clear_all()
+        
+        log_admin_action(
+            admin_id=ADMIN_ID,
+            action_type="sync_db",
+            ip_address=client_ip,
+            status="success"
+        )
+        
+        return {"ok": True, "message": "Database synced to HuggingFace"}
+    except Exception as e:
+        log_admin_action(
+            admin_id=ADMIN_ID,
+            action_type="sync_db",
+            ip_address=client_ip,
+            status="failed",
+            action_details=str(e)
+        )
+        raise HTTPException(500, f"Failed to sync database: {str(e)}")
+
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Ads System Endpoints (UI only - disabled by default)
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -1097,6 +1482,948 @@ async def get_subscription_stats(request: Request):
         }
     finally:
         conn.close()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Friends System API Endpoints
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/friends/search")
+@rate_limit(max_requests=30, window_seconds=60)
+async def search_users_endpoint(
+    request: Request,
+    query: str = Query(..., min_length=2),
+    user_id: int = Query(...),
+    limit: int = Query(20, ge=1, le=50)
+):
+    """Search for users to add as friends."""
+    from app.friends import FriendsManager
+    
+    results = FriendsManager.search_users(query, user_id, limit)
+    return {"users": results}
+
+
+@app.post("/api/friends/request")
+@rate_limit(max_requests=10, window_seconds=60)
+async def send_friend_request_endpoint(request: Request):
+    """Send a friend request."""
+    from app.friends import FriendsManager
+    
+    data = await request.json()
+    from_user_id = data.get("from_user_id")
+    to_user_id = data.get("to_user_id")
+    message = data.get("message")
+    
+    if not from_user_id or not to_user_id:
+        raise HTTPException(400, "Missing required fields")
+    
+    result = FriendsManager.send_friend_request(from_user_id, to_user_id, message)
+    
+    if not result["success"]:
+        raise HTTPException(400, result.get("error", "Failed to send friend request"))
+    
+    return result
+
+
+@app.get("/api/friends/requests")
+@rate_limit(max_requests=30, window_seconds=60)
+async def get_friend_requests_endpoint(
+    request: Request,
+    user_id: int = Query(...),
+    request_type: str = Query("received", regex="^(received|sent)$")
+):
+    """Get friend requests (received or sent)."""
+    from app.friends import FriendsManager
+    
+    requests_list = FriendsManager.get_friend_requests(user_id, request_type)
+    return {"requests": requests_list}
+
+
+@app.post("/api/friends/accept/{request_id}")
+@rate_limit(max_requests=20, window_seconds=60)
+async def accept_friend_request_endpoint(request: Request, request_id: int):
+    """Accept a friend request."""
+    from app.friends import FriendsManager
+    
+    data = await request.json()
+    user_id = data.get("user_id")
+    
+    if not user_id:
+        raise HTTPException(400, "Missing user_id")
+    
+    result = FriendsManager.accept_friend_request(request_id, user_id)
+    
+    if not result["success"]:
+        raise HTTPException(400, result.get("error", "Failed to accept friend request"))
+    
+    cache_clear_prefix(f"friends_{user_id}")
+    return result
+
+
+@app.post("/api/friends/reject/{request_id}")
+@rate_limit(max_requests=20, window_seconds=60)
+async def reject_friend_request_endpoint(request: Request, request_id: int):
+    """Reject a friend request."""
+    from app.friends import FriendsManager
+    
+    data = await request.json()
+    user_id = data.get("user_id")
+    
+    if not user_id:
+        raise HTTPException(400, "Missing user_id")
+    
+    result = FriendsManager.reject_friend_request(request_id, user_id)
+    
+    if not result["success"]:
+        raise HTTPException(400, result.get("error", "Failed to reject friend request"))
+    
+    return result
+
+
+@app.post("/api/friends/cancel/{request_id}")
+@rate_limit(max_requests=20, window_seconds=60)
+async def cancel_friend_request_endpoint(request: Request, request_id: int):
+    """Cancel a sent friend request."""
+    from app.friends import FriendsManager
+    
+    data = await request.json()
+    user_id = data.get("user_id")
+    
+    if not user_id:
+        raise HTTPException(400, "Missing user_id")
+    
+    result = FriendsManager.cancel_friend_request(request_id, user_id)
+    
+    if not result["success"]:
+        raise HTTPException(400, result.get("error", "Failed to cancel friend request"))
+    
+    return result
+
+
+@app.get("/api/friends/list")
+@rate_limit(max_requests=30, window_seconds=60)
+async def get_friends_list_endpoint(
+    request: Request,
+    user_id: int = Query(...),
+    limit: int = Query(100, ge=1, le=200),
+    offset: int = Query(0, ge=0)
+):
+    """Get user's friends list."""
+    from app.friends import FriendsManager
+    
+    cache_key = f"friends_{user_id}_{limit}_{offset}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+    
+    friends = FriendsManager.get_friends_list(user_id, limit, offset)
+    result = {"friends": friends}
+    
+    cache_set(cache_key, result, 60)
+    return result
+
+
+@app.delete("/api/friends/remove/{friend_id}")
+@rate_limit(max_requests=20, window_seconds=60)
+async def remove_friend_endpoint(request: Request, friend_id: int):
+    """Remove a friend."""
+    from app.friends import FriendsManager
+    
+    data = await request.json()
+    user_id = data.get("user_id")
+    
+    if not user_id:
+        raise HTTPException(400, "Missing user_id")
+    
+    result = FriendsManager.remove_friend(user_id, friend_id)
+    
+    if not result["success"]:
+        raise HTTPException(400, result.get("error", "Failed to remove friend"))
+    
+    cache_clear_prefix(f"friends_{user_id}")
+    return result
+
+
+@app.post("/api/friends/block/{blocked_user_id}")
+@rate_limit(max_requests=10, window_seconds=60)
+async def block_user_endpoint(request: Request, blocked_user_id: int):
+    """Block a user."""
+    from app.friends import FriendsManager
+    
+    data = await request.json()
+    user_id = data.get("user_id")
+    reason = data.get("reason")
+    
+    if not user_id:
+        raise HTTPException(400, "Missing user_id")
+    
+    result = FriendsManager.block_user(user_id, blocked_user_id, reason)
+    
+    if not result["success"]:
+        raise HTTPException(400, result.get("error", "Failed to block user"))
+    
+    cache_clear_prefix(f"friends_{user_id}")
+    return result
+
+
+@app.post("/api/friends/unblock/{blocked_user_id}")
+@rate_limit(max_requests=10, window_seconds=60)
+async def unblock_user_endpoint(request: Request, blocked_user_id: int):
+    """Unblock a user."""
+    from app.friends import FriendsManager
+    
+    data = await request.json()
+    user_id = data.get("user_id")
+    
+    if not user_id:
+        raise HTTPException(400, "Missing user_id")
+    
+    result = FriendsManager.unblock_user(user_id, blocked_user_id)
+    
+    if not result["success"]:
+        raise HTTPException(400, result.get("error", "Failed to unblock user"))
+    
+    return result
+
+
+@app.get("/api/friends/blocked")
+@rate_limit(max_requests=20, window_seconds=60)
+async def get_blocked_users_endpoint(request: Request, user_id: int = Query(...)):
+    """Get list of blocked users."""
+    from app.friends import FriendsManager
+    
+    blocked = FriendsManager.get_blocked_users(user_id)
+    return {"blocked_users": blocked}
+
+
+@app.get("/api/friends/status/{other_user_id}")
+@rate_limit(max_requests=30, window_seconds=60)
+async def get_friendship_status_endpoint(
+    request: Request,
+    other_user_id: int,
+    user_id: int = Query(...)
+):
+    """Get friendship status with another user."""
+    from app.friends import FriendsManager
+    
+    status = FriendsManager.get_friendship_status(user_id, other_user_id)
+    return {"status": status}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Messaging System API Endpoints
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.post("/api/messages/conversations")
+@rate_limit(max_requests=20, window_seconds=60)
+async def create_conversation_endpoint(request: Request):
+    """Create a new conversation."""
+    from app.messaging import MessagingManager
+    
+    data = await request.json()
+    user_ids = data.get("user_ids", [])
+    conversation_type = data.get("type", "direct")
+    name = data.get("name")
+    created_by = data.get("created_by")
+    
+    if not user_ids or len(user_ids) < 2:
+        raise HTTPException(400, "At least 2 users required")
+    
+    result = MessagingManager.create_conversation(user_ids, conversation_type, name, created_by)
+    
+    if not result["success"]:
+        raise HTTPException(400, result.get("error", "Failed to create conversation"))
+    
+    return result
+
+
+@app.get("/api/messages/conversations")
+@rate_limit(max_requests=30, window_seconds=60)
+async def get_conversations_endpoint(
+    request: Request,
+    user_id: int = Query(...),
+    include_archived: bool = Query(False)
+):
+    """Get user's conversations."""
+    from app.messaging import MessagingManager
+    
+    cache_key = f"conversations_{user_id}_{include_archived}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+    
+    conversations = MessagingManager.get_conversations(user_id, include_archived)
+    result = {"conversations": conversations}
+    
+    cache_set(cache_key, result, 30)
+    return result
+
+
+@app.post("/api/messages/send")
+@rate_limit(max_requests=60, window_seconds=60)
+async def send_message_endpoint(request: Request):
+    """Send a message."""
+    from app.messaging import MessagingManager
+    
+    data = await request.json()
+    conversation_id = data.get("conversation_id")
+    sender_id = data.get("sender_id")
+    content = data.get("content")
+    media_type = data.get("media_type", "text")
+    media_file_id = data.get("media_file_id")
+    media_metadata = data.get("media_metadata")
+    reply_to_message_id = data.get("reply_to_message_id")
+    
+    if not conversation_id or not sender_id:
+        raise HTTPException(400, "Missing required fields")
+    
+    if media_type == "text" and not content:
+        raise HTTPException(400, "Text messages require content")
+    
+    result = MessagingManager.send_message(
+        conversation_id, sender_id, content, media_type,
+        media_file_id, media_metadata, reply_to_message_id
+    )
+    
+    if not result["success"]:
+        raise HTTPException(400, result.get("error", "Failed to send message"))
+    
+    cache_clear_prefix(f"conversations_{sender_id}")
+    cache_clear_prefix(f"messages_{conversation_id}")
+    return result
+
+
+@app.get("/api/messages/{conversation_id}")
+@rate_limit(max_requests=60, window_seconds=60)
+async def get_messages_endpoint(
+    request: Request,
+    conversation_id: int,
+    user_id: int = Query(...),
+    limit: int = Query(50, ge=1, le=100),
+    before_message_id: int = Query(None)
+):
+    """Get messages from a conversation."""
+    from app.messaging import MessagingManager
+    
+    messages = MessagingManager.get_messages(conversation_id, user_id, limit, before_message_id)
+    return {"messages": messages}
+
+
+@app.put("/api/messages/edit/{message_id}")
+@rate_limit(max_requests=30, window_seconds=60)
+async def edit_message_endpoint(request: Request, message_id: int):
+    """Edit a message."""
+    from app.messaging import MessagingManager
+    
+    data = await request.json()
+    user_id = data.get("user_id")
+    new_content = data.get("content")
+    
+    if not user_id or not new_content:
+        raise HTTPException(400, "Missing required fields")
+    
+    result = MessagingManager.edit_message(message_id, user_id, new_content)
+    
+    if not result["success"]:
+        raise HTTPException(400, result.get("error", "Failed to edit message"))
+    
+    return result
+
+
+@app.delete("/api/messages/delete/{message_id}")
+@rate_limit(max_requests=30, window_seconds=60)
+async def delete_message_endpoint(request: Request, message_id: int):
+    """Delete a message."""
+    from app.messaging import MessagingManager
+    
+    data = await request.json()
+    user_id = data.get("user_id")
+    
+    if not user_id:
+        raise HTTPException(400, "Missing user_id")
+    
+    result = MessagingManager.delete_message(message_id, user_id)
+    
+    if not result["success"]:
+        raise HTTPException(400, result.get("error", "Failed to delete message"))
+    
+    return result
+
+
+@app.post("/api/messages/read")
+@rate_limit(max_requests=60, window_seconds=60)
+async def mark_as_read_endpoint(request: Request):
+    """Mark messages as read."""
+    from app.messaging import MessagingManager
+    
+    data = await request.json()
+    conversation_id = data.get("conversation_id")
+    user_id = data.get("user_id")
+    message_id = data.get("message_id")
+    
+    if not conversation_id or not user_id:
+        raise HTTPException(400, "Missing required fields")
+    
+    result = MessagingManager.mark_as_read(conversation_id, user_id, message_id)
+    
+    if not result["success"]:
+        raise HTTPException(400, result.get("error", "Failed to mark as read"))
+    
+    cache_clear_prefix(f"conversations_{user_id}")
+    return result
+
+
+@app.post("/api/messages/reaction")
+@rate_limit(max_requests=60, window_seconds=60)
+async def add_reaction_endpoint(request: Request):
+    """Add a reaction to a message."""
+    from app.messaging import MessagingManager
+    
+    data = await request.json()
+    message_id = data.get("message_id")
+    user_id = data.get("user_id")
+    reaction = data.get("reaction")
+    
+    if not message_id or not user_id or not reaction:
+        raise HTTPException(400, "Missing required fields")
+    
+    result = MessagingManager.add_reaction(message_id, user_id, reaction)
+    
+    if not result["success"]:
+        raise HTTPException(400, result.get("error", "Failed to add reaction"))
+    
+    return result
+
+
+@app.delete("/api/messages/reaction")
+@rate_limit(max_requests=60, window_seconds=60)
+async def remove_reaction_endpoint(request: Request):
+    """Remove a reaction from a message."""
+    from app.messaging import MessagingManager
+    
+    data = await request.json()
+    message_id = data.get("message_id")
+    user_id = data.get("user_id")
+    reaction = data.get("reaction")
+    
+    if not message_id or not user_id or not reaction:
+        raise HTTPException(400, "Missing required fields")
+    
+    result = MessagingManager.remove_reaction(message_id, user_id, reaction)
+    
+    if not result["success"]:
+        raise HTTPException(400, result.get("error", "Failed to remove reaction"))
+    
+    return result
+
+
+@app.get("/api/messages/unread")
+@rate_limit(max_requests=30, window_seconds=60)
+async def get_unread_count_endpoint(request: Request, user_id: int = Query(...)):
+    """Get total unread message count."""
+    from app.messaging import MessagingManager
+    
+    count = MessagingManager.get_unread_count(user_id)
+    return {"unread_count": count}
+
+
+@app.post("/api/messages/typing")
+@rate_limit(max_requests=120, window_seconds=60)
+async def set_typing_indicator_endpoint(request: Request):
+    """Set typing indicator."""
+    from app.messaging import MessagingManager
+    
+    data = await request.json()
+    conversation_id = data.get("conversation_id")
+    user_id = data.get("user_id")
+    is_typing = data.get("is_typing", True)
+    
+    if not conversation_id or not user_id:
+        raise HTTPException(400, "Missing required fields")
+    
+    result = MessagingManager.set_typing_indicator(conversation_id, user_id, is_typing)
+    
+    if not result["success"]:
+        raise HTTPException(400, result.get("error", "Failed to set typing indicator"))
+    
+    return result
+
+
+@app.get("/api/messages/typing/{conversation_id}")
+@rate_limit(max_requests=60, window_seconds=60)
+async def get_typing_users_endpoint(
+    request: Request,
+    conversation_id: int,
+    user_id: int = Query(...)
+):
+    """Get users currently typing in a conversation."""
+    from app.messaging import MessagingManager
+    
+    typing_users = MessagingManager.get_typing_users(conversation_id, user_id)
+    return {"typing_users": typing_users}
+
+
+@app.post("/api/messages/online")
+@rate_limit(max_requests=60, window_seconds=60)
+async def update_online_status_endpoint(request: Request):
+    """Update user's online status."""
+    from app.messaging import MessagingManager
+    
+    data = await request.json()
+    user_id = data.get("user_id")
+    is_online = data.get("is_online", True)
+    status_text = data.get("status_text")
+    
+    if not user_id:
+        raise HTTPException(400, "Missing user_id")
+    
+    result = MessagingManager.update_online_status(user_id, is_online, status_text)
+    
+    if not result["success"]:
+        raise HTTPException(400, result.get("error", "Failed to update online status"))
+    
+    return result
+
+
+@app.post("/api/messages/conversation/settings")
+@rate_limit(max_requests=30, window_seconds=60)
+async def toggle_conversation_setting_endpoint(request: Request):
+    """Toggle conversation settings (pin, mute, archive)."""
+    from app.messaging import MessagingManager
+    
+    data = await request.json()
+    conversation_id = data.get("conversation_id")
+    user_id = data.get("user_id")
+    setting = data.get("setting")
+    value = data.get("value", True)
+    
+    if not conversation_id or not user_id or not setting:
+        raise HTTPException(400, "Missing required fields")
+    
+    result = MessagingManager.toggle_conversation_setting(conversation_id, user_id, setting, value)
+    
+    if not result["success"]:
+        raise HTTPException(400, result.get("error", "Failed to update setting"))
+    
+    cache_clear_prefix(f"conversations_{user_id}")
+    return result
+
+
+@app.get("/api/messages/search/{conversation_id}")
+@rate_limit(max_requests=30, window_seconds=60)
+async def search_messages_endpoint(
+    request: Request,
+    conversation_id: int,
+    user_id: int = Query(...),
+    query: str = Query(..., min_length=2),
+    limit: int = Query(50, ge=1, le=100)
+):
+    """Search messages in a conversation."""
+    from app.messaging import MessagingManager
+    
+    messages = MessagingManager.search_messages(conversation_id, user_id, query, limit)
+    return {"messages": messages}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Watch Rooms API Endpoints
+# ══════════════════════════════════════════════════════════════════════════════
+
+from pydantic import BaseModel
+from typing import Optional as Opt
+
+
+class CreateRoomRequest(BaseModel):
+    host_user_id: int
+    content_type: str
+    content_id: str
+    name: str
+    description: str = ""
+    episode_id: Opt[int] = None
+    is_public: bool = True
+    password: Opt[str] = None
+    max_participants: int = 50
+    sync_mode: str = "host_control"
+    voice_chat_enabled: bool = False
+
+
+class JoinRoomRequest(BaseModel):
+    user_id: int
+    password: Opt[str] = None
+
+
+class UpdateRoomRequest(BaseModel):
+    user_id: int
+    name: Opt[str] = None
+    description: Opt[str] = None
+    is_public: Opt[bool] = None
+    password: Opt[str] = None
+    max_participants: Opt[int] = None
+    sync_mode: Opt[str] = None
+    voice_chat_enabled: Opt[bool] = None
+
+
+class SyncPlaybackRequest(BaseModel):
+    user_id: int
+    action: str
+    timestamp: float
+    playback_speed: float = 1.0
+
+
+class SendMessageRequest(BaseModel):
+    user_id: int
+    content: str
+    message_type: str = "text"
+    reply_to: Opt[int] = None
+
+
+@app.post("/api/rooms/create")
+@rate_limit(max_requests=10, window_seconds=60)
+async def create_room_endpoint(request: Request, data: CreateRoomRequest):
+    """Create a new watch room."""
+    from app import watch_rooms
+    
+    try:
+        room = watch_rooms.create_room(
+            host_user_id=data.host_user_id,
+            content_type=data.content_type,
+            content_id=data.content_id,
+            name=data.name,
+            description=data.description,
+            episode_id=data.episode_id,
+            is_public=data.is_public,
+            password=data.password,
+            max_participants=data.max_participants,
+            sync_mode=data.sync_mode,
+            voice_chat_enabled=data.voice_chat_enabled
+        )
+        return {"success": True, "room": room}
+    except Exception as e:
+        logger.error(f"Error creating room: {e}")
+        raise HTTPException(500, str(e))
+
+
+@app.get("/api/rooms/active")
+async def get_active_rooms_endpoint(
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    content_type: Opt[str] = Query(None),
+    is_public: bool = Query(True)
+):
+    """Get list of active watch rooms."""
+    from app import watch_rooms
+    
+    cached_key = f"active_rooms_{content_type}_{is_public}_{limit}_{offset}"
+    cached = cache_get(cached_key)
+    if cached:
+        return cached
+    
+    rooms = watch_rooms.get_active_rooms(
+        limit=limit,
+        offset=offset,
+        content_type=content_type,
+        is_public=is_public
+    )
+    
+    result = {"rooms": rooms, "count": len(rooms)}
+    cache_set(cached_key, result, 10)  # Cache for 10 seconds
+    return result
+
+
+@app.get("/api/rooms/{room_id}")
+async def get_room_details_endpoint(room_id: str):
+    """Get detailed information about a room."""
+    from app import watch_rooms
+    
+    try:
+        room = watch_rooms.get_room_details(room_id)
+        return {"success": True, "room": room}
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        logger.error(f"Error getting room details: {e}")
+        raise HTTPException(500, str(e))
+
+
+@app.post("/api/rooms/{room_id}/join")
+@rate_limit(max_requests=20, window_seconds=60)
+async def join_room_endpoint(request: Request, room_id: str, data: JoinRoomRequest):
+    """Join a watch room."""
+    from app import watch_rooms
+    
+    try:
+        room = watch_rooms.join_room(
+            room_id=room_id,
+            user_id=data.user_id,
+            password=data.password
+        )
+        return {"success": True, "room": room}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        logger.error(f"Error joining room: {e}")
+        raise HTTPException(500, str(e))
+
+
+@app.post("/api/rooms/{room_id}/leave")
+@rate_limit(max_requests=20, window_seconds=60)
+async def leave_room_endpoint(request: Request, room_id: str, user_id: int = Query(...)):
+    """Leave a watch room."""
+    from app import watch_rooms
+    
+    try:
+        success = watch_rooms.leave_room(room_id, user_id)
+        return {"success": success}
+    except Exception as e:
+        logger.error(f"Error leaving room: {e}")
+        raise HTTPException(500, str(e))
+
+
+@app.post("/api/rooms/{room_id}/kick")
+@rate_limit(max_requests=10, window_seconds=60)
+async def kick_participant_endpoint(
+    request: Request,
+    room_id: str,
+    user_id: int = Query(...),
+    target_id: int = Query(...)
+):
+    """Kick a participant from the room."""
+    from app import watch_rooms
+    from app.websocket_manager import notify_participant_kicked
+    
+    try:
+        success = watch_rooms.kick_participant(room_id, user_id, target_id)
+        if success:
+            await notify_participant_kicked(room_id, target_id)
+        return {"success": success}
+    except ValueError as e:
+        raise HTTPException(403, str(e))
+    except Exception as e:
+        logger.error(f"Error kicking participant: {e}")
+        raise HTTPException(500, str(e))
+
+
+@app.put("/api/rooms/{room_id}/settings")
+@rate_limit(max_requests=10, window_seconds=60)
+async def update_room_settings_endpoint(
+    request: Request,
+    room_id: str,
+    data: UpdateRoomRequest
+):
+    """Update room settings."""
+    from app import watch_rooms
+    from app.websocket_manager import notify_room_update
+    
+    try:
+        room = watch_rooms.update_room_settings(
+            room_id=room_id,
+            user_id=data.user_id,
+            name=data.name,
+            description=data.description,
+            is_public=data.is_public,
+            password=data.password,
+            max_participants=data.max_participants,
+            sync_mode=data.sync_mode,
+            voice_chat_enabled=data.voice_chat_enabled
+        )
+        await notify_room_update(room_id, "settings", room)
+        return {"success": True, "room": room}
+    except ValueError as e:
+        raise HTTPException(403, str(e))
+    except Exception as e:
+        logger.error(f"Error updating room settings: {e}")
+        raise HTTPException(500, str(e))
+
+
+@app.delete("/api/rooms/{room_id}")
+@rate_limit(max_requests=10, window_seconds=60)
+async def delete_room_endpoint(request: Request, room_id: str, user_id: int = Query(...)):
+    """Delete a watch room."""
+    from app import watch_rooms
+    from app.websocket_manager import notify_room_ended
+    
+    try:
+        success = watch_rooms.delete_room(room_id, user_id)
+        if success:
+            await notify_room_ended(room_id)
+        return {"success": success}
+    except ValueError as e:
+        raise HTTPException(403, str(e))
+    except Exception as e:
+        logger.error(f"Error deleting room: {e}")
+        raise HTTPException(500, str(e))
+
+
+@app.get("/api/rooms/search")
+async def search_rooms_endpoint(query: str = Query(..., min_length=2), limit: int = Query(20, ge=1, le=50)):
+    """Search for watch rooms."""
+    from app import watch_rooms
+    
+    rooms = watch_rooms.search_rooms(query, limit)
+    return {"rooms": rooms, "count": len(rooms)}
+
+
+# ── Room Sync Endpoints ──────────────────────────────────────────────────────
+
+@app.post("/api/rooms/{room_id}/sync")
+@rate_limit(max_requests=100, window_seconds=60)
+async def sync_playback_endpoint(request: Request, room_id: str, data: SyncPlaybackRequest):
+    """Synchronize playback action."""
+    from app import room_sync
+    
+    try:
+        sync_state = room_sync.sync_playback(
+            room_id=room_id,
+            user_id=data.user_id,
+            action=data.action,
+            timestamp=data.timestamp,
+            playback_speed=data.playback_speed
+        )
+        return {"success": True, "sync_state": sync_state}
+    except ValueError as e:
+        raise HTTPException(403, str(e))
+    except Exception as e:
+        logger.error(f"Error syncing playback: {e}")
+        raise HTTPException(500, str(e))
+
+
+@app.get("/api/rooms/{room_id}/sync")
+async def get_sync_state_endpoint(room_id: str):
+    """Get current synchronization state."""
+    from app import room_sync
+    
+    try:
+        sync_state = room_sync.get_sync_state(room_id)
+        return {"success": True, "sync_state": sync_state}
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        logger.error(f"Error getting sync state: {e}")
+        raise HTTPException(500, str(e))
+
+
+@app.post("/api/rooms/{room_id}/resync")
+@rate_limit(max_requests=20, window_seconds=60)
+async def resync_participant_endpoint(request: Request, room_id: str, user_id: int = Query(...)):
+    """Resynchronize a participant."""
+    from app import room_sync
+    
+    try:
+        sync_state = room_sync.resync_participant(room_id, user_id)
+        return {"success": True, "sync_state": sync_state}
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        logger.error(f"Error resyncing participant: {e}")
+        raise HTTPException(500, str(e))
+
+
+# ── Room Chat Endpoints ──────────────────────────────────────────────────────
+
+@app.post("/api/rooms/{room_id}/chat")
+@rate_limit(max_requests=60, window_seconds=60)
+async def send_room_message_endpoint(request: Request, room_id: str, data: SendMessageRequest):
+    """Send a message in room chat."""
+    from app import watch_rooms
+    
+    try:
+        message = watch_rooms.send_room_message(
+            room_id=room_id,
+            user_id=data.user_id,
+            content=data.content,
+            message_type=data.message_type,
+            reply_to=data.reply_to
+        )
+        return {"success": True, "message": message}
+    except ValueError as e:
+        raise HTTPException(403, str(e))
+    except Exception as e:
+        logger.error(f"Error sending message: {e}")
+        raise HTTPException(500, str(e))
+
+
+@app.get("/api/rooms/{room_id}/chat")
+async def get_room_messages_endpoint(
+    room_id: str,
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    before_id: Opt[int] = Query(None)
+):
+    """Get chat messages from a room."""
+    from app import watch_rooms
+    
+    messages = watch_rooms.get_room_messages(room_id, limit, offset, before_id)
+    return {"messages": messages, "count": len(messages)}
+
+
+@app.delete("/api/rooms/{room_id}/chat/{message_id}")
+@rate_limit(max_requests=20, window_seconds=60)
+async def delete_room_message_endpoint(
+    request: Request,
+    room_id: str,
+    message_id: int,
+    user_id: int = Query(...)
+):
+    """Delete a chat message."""
+    from app import watch_rooms
+    
+    try:
+        success = watch_rooms.delete_room_message(message_id, user_id)
+        return {"success": success}
+    except ValueError as e:
+        raise HTTPException(403, str(e))
+    except Exception as e:
+        logger.error(f"Error deleting message: {e}")
+        raise HTTPException(500, str(e))
+
+
+@app.get("/api/rooms/{room_id}/participants")
+async def get_room_participants_endpoint(room_id: str):
+    """Get all participants in a room."""
+    from app import watch_rooms
+    
+    participants = watch_rooms.get_room_participants(room_id)
+    return {"participants": participants, "count": len(participants)}
+
+
+# ── WebSocket Endpoint ───────────────────────────────────────────────────────
+
+@app.websocket("/ws/rooms/{room_id}")
+async def websocket_room_endpoint(websocket: WebSocket, room_id: str, user_id: int = Query(...)):
+    """WebSocket endpoint for real-time room communication."""
+    from app.websocket_manager import manager, handle_websocket_message
+    from app import watch_rooms
+    
+    # Verify user is in room
+    try:
+        room = watch_rooms.get_room_details(room_id)
+        user_in_room = any(p['user_id'] == user_id for p in room.get('participants', []))
+        
+        if not user_in_room:
+            await websocket.close(code=1008, reason="Not in room")
+            return
+    except Exception as e:
+        logger.error(f"Error verifying room access: {e}")
+        await websocket.close(code=1011, reason="Server error")
+        return
+    
+    # Connect to room
+    await manager.connect(websocket, room_id, user_id)
+    
+    try:
+        while True:
+            # Receive message
+            data = await websocket.receive_json()
+            
+            # Handle message
+            await handle_websocket_message(websocket, room_id, user_id, data)
+    
+    except WebSocketDisconnect:
+        logger.info(f"WebSocket disconnected: user {user_id} from room {room_id}")
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}", exc_info=True)
+    finally:
+        await manager.disconnect(websocket)
 
 
 # ── Static frontend ─────────────────────────────────────────────────────────
