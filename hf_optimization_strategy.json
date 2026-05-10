@@ -1,0 +1,254 @@
+{
+  "timestamp": "2026-05-09T02:49:16.141199",
+  "total_accounts": 2,
+  "distribution_strategy": {
+    "spaces": {
+      "total_spaces_recommended": 4,
+      "distribution": [
+        {
+          "account": "ToolKit-backend",
+          "spaces": [
+            {
+              "name": "popcorn-main",
+              "purpose": "Main API & Frontend",
+              "services": [
+                "API",
+                "Frontend",
+                "WebSocket"
+              ],
+              "priority": "high",
+              "status": "running"
+            },
+            {
+              "name": "popcorn-streaming",
+              "purpose": "Streaming & Media Processing",
+              "services": [
+                "Stream Handler",
+                "Video Processing",
+                "Cache"
+              ],
+              "priority": "high",
+              "status": "planned"
+            }
+          ]
+        },
+        {
+          "account": "rayig",
+          "spaces": [
+            {
+              "name": "popcorn-backup",
+              "purpose": "Backup & Sync Services",
+              "services": [
+                "Backup Manager",
+                "Sync Bot",
+                "Mirror Manager"
+              ],
+              "priority": "medium",
+              "status": "planned"
+            },
+            {
+              "name": "popcorn-analytics",
+              "purpose": "Analytics & Monitoring",
+              "services": [
+                "Analytics",
+                "Health Monitor",
+                "User Tracking"
+              ],
+              "priority": "medium",
+              "status": "planned"
+            }
+          ]
+        }
+      ]
+    },
+    "datasets": {
+      "total_datasets_recommended": 6,
+      "sharding_strategy": "functional",
+      "distribution": [
+        {
+          "account": "ToolKit-backend",
+          "datasets": [
+            {
+              "name": "PopCornDB-Main",
+              "purpose": "Core Database",
+              "tables": [
+                "movies",
+                "series",
+                "episodes",
+                "users"
+              ],
+              "size_estimate_gb": 5,
+              "priority": "critical",
+              "status": "active"
+            },
+            {
+              "name": "PopCornDB-Media",
+              "purpose": "Media Metadata & Cache",
+              "tables": [
+                "media_files",
+                "thumbnails",
+                "subtitles"
+              ],
+              "size_estimate_gb": 10,
+              "priority": "high",
+              "status": "planned"
+            },
+            {
+              "name": "PopCornDB-Analytics",
+              "purpose": "Analytics & Logs",
+              "tables": [
+                "view_logs",
+                "user_activity",
+                "performance_metrics"
+              ],
+              "size_estimate_gb": 3,
+              "priority": "medium",
+              "status": "planned"
+            }
+          ]
+        },
+        {
+          "account": "rayig",
+          "datasets": [
+            {
+              "name": "PopCornDB-Backup",
+              "purpose": "Full Database Backup",
+              "tables": [
+                "all_tables_backup"
+              ],
+              "size_estimate_gb": 20,
+              "priority": "high",
+              "status": "planned"
+            },
+            {
+              "name": "PopCornDB-Cache",
+              "purpose": "Distributed Cache",
+              "tables": [
+                "cache_entries",
+                "session_data"
+              ],
+              "size_estimate_gb": 2,
+              "priority": "medium",
+              "status": "planned"
+            },
+            {
+              "name": "PopCornDB-Archive",
+              "purpose": "Historical Data Archive",
+              "tables": [
+                "archived_logs",
+                "old_sessions"
+              ],
+              "size_estimate_gb": 5,
+              "priority": "low",
+              "status": "planned"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "recommendations": [
+    {
+      "priority": "high",
+      "action": "Create popcorn-streaming Space on ToolKit-backend",
+      "reason": "Separate streaming services to avoid overloading main Space",
+      "estimated_benefit": "50% reduction in main Space load"
+    },
+    {
+      "priority": "high",
+      "action": "Implement database sharding across 3 datasets",
+      "reason": "Improve query performance and reduce single point of failure",
+      "estimated_benefit": "3x faster queries, better reliability"
+    },
+    {
+      "priority": "medium",
+      "action": "Create backup Space on rayig account",
+      "reason": "Ensure service continuity if primary account has issues",
+      "estimated_benefit": "99.9% uptime guarantee"
+    },
+    {
+      "priority": "medium",
+      "action": "Implement CDN-like caching with multiple datasets",
+      "reason": "Reduce API calls and improve response times",
+      "estimated_benefit": "70% reduction in API calls"
+    },
+    {
+      "priority": "low",
+      "action": "Create analytics Space for monitoring",
+      "reason": "Centralized monitoring without affecting main services",
+      "estimated_benefit": "Better observability"
+    }
+  ],
+  "load_balancing": {
+    "method": "round_robin_with_health_check",
+    "failover": "automatic",
+    "health_check_interval_seconds": 30,
+    "retry_strategy": {
+      "max_retries": 3,
+      "backoff_factor": 2,
+      "timeout_seconds": 10
+    },
+    "traffic_distribution": {
+      "primary_account": 60,
+      "secondary_account": 40
+    }
+  },
+  "cost_analysis": {
+    "current_monthly_cost": 0,
+    "projected_monthly_cost": 0,
+    "resources_used": {
+      "spaces": "4 CPU-basic (free)",
+      "datasets": "6 datasets (free)",
+      "storage_gb": "~45 GB (free)",
+      "bandwidth": "unlimited (free)"
+    },
+    "cost_savings": "~$500/month vs traditional hosting"
+  },
+  "implementation_timeline": [
+    {
+      "phase": 1,
+      "duration_hours": 2,
+      "tasks": [
+        "Create Multi-Space Manager",
+        "Create Multi-Dataset Manager",
+        "Implement health monitoring"
+      ]
+    },
+    {
+      "phase": 2,
+      "duration_hours": 3,
+      "tasks": [
+        "Create popcorn-streaming Space",
+        "Migrate streaming services",
+        "Test load balancing"
+      ]
+    },
+    {
+      "phase": 3,
+      "duration_hours": 2,
+      "tasks": [
+        "Create sharded datasets",
+        "Implement data migration",
+        "Test database operations"
+      ]
+    },
+    {
+      "phase": 4,
+      "duration_hours": 2,
+      "tasks": [
+        "Create backup Space on rayig",
+        "Setup automatic failover",
+        "Test disaster recovery"
+      ]
+    },
+    {
+      "phase": 5,
+      "duration_hours": 1,
+      "tasks": [
+        "Create analytics Space",
+        "Deploy monitoring dashboard",
+        "Final testing"
+      ]
+    }
+  ]
+}

@@ -1,17 +1,33 @@
-import asyncio, logging, os, json, time
+import os as _os
+from typing import Optional as Opt
+from pydantic import BaseModel
+from app.error_handlers import register_error_handlers
+import asyncio
+import logging
+import os
+import json
+import time
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket
+from fastapi.websockets import WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from app import database as db
 from app.database import init_db, push_db_to_hf
 from app.stream import stream_file, get_stream_info, init_pyrogram, stop_pyrogram
-from app.config import MAIN_BOT_TOKEN, ADMIN_ID
+from app.config import (
+    MAIN_BOT_TOKEN, ADMIN_ID, SUBSCRIPTION_REQUIRED,
+    PRIVATE_GROUP_ID, PUBLIC_CHANNEL_ID,
+    SESSION_1_API_ID, SESSION_2_API_ID,
+    STREAM_BOT_1, STREAM_BOT_2
+)
 from app.smart_cache import cache_get, cache_set, cache_clear_prefix, cache_clear_all, cache_get_stats
-from app.security import require_admin, rate_limit, validate_request_security, security_logger
+from app.security import require_admin, rate_limit, validate_request_security
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 _bot_task = _sync_task = _autoscan_task = _smart_sync_task = None
 
@@ -27,59 +43,115 @@ def _cache_clear_prefix(prefix: str): return cache_clear_prefix(prefix)
 async def lifespan(app: FastAPI):
     global _bot_task, _sync_task, _autoscan_task, _smart_sync_task
     logger.info("🍿 PopCorn v4.2 starting…")
+
+    # Initialize database with connection pooling
     init_db()
+    from app.database import init_connection_pool
+    init_connection_pool(pool_size=10)
+    logger.info("✅ Database connection pool initialized")
+
+    # Initialize Pyrogram
     await init_pyrogram()
 
     if MAIN_BOT_TOKEN:
         try:
             from app.sync_bot import build_sync_app
             from app.bot_commands import (
-                cmd_start, cmd_app, cmd_help, cmd_new, cmd_top, cmd_stats, cmd_admin,
+                cmd_start,
+                cmd_app,
+                cmd_help,
+                cmd_new,
+                cmd_top,
+                cmd_stats,
+                cmd_admin,
                 get_callback_handlers,
+                registration_name,
+                registration_language,
+                cancel_registration,
+                REGISTRATION_NAME,
+                REGISTRATION_LANGUAGE,
             )
             from app.register_topic_handler import handle_new_topic, handle_edited_topic
-            from telegram.ext import CommandHandler, MessageHandler, filters
+            from app.admin_permissions import AdminPermissionManager, AdminRole
+            from telegram.ext import CommandHandler, MessageHandler, filters, ConversationHandler
 
             bot_app = build_sync_app()
-            bot_app.add_handler(CommandHandler("start",    cmd_start))
-            bot_app.add_handler(CommandHandler("app",      cmd_app))
-            bot_app.add_handler(CommandHandler("help",     cmd_help))
-            bot_app.add_handler(CommandHandler("new",      cmd_new))
-            bot_app.add_handler(CommandHandler("top",      cmd_top))
-            bot_app.add_handler(CommandHandler("stats",    cmd_stats))
-            bot_app.add_handler(CommandHandler("admin",    cmd_admin))
-            bot_app.add_handler(CommandHandler("sync_db",  _cmd_sync_db))
+            
+            # Initialize permission manager with a simple wrapper
+            class SimpleConnectionPool:
+                """Simple wrapper for database connection"""
+                def get_connection(self):
+                    from app.database import get_connection_from_pool
+                    return get_connection_from_pool()
+            
+            conn_pool = SimpleConnectionPool()
+            perm_manager = AdminPermissionManager(conn_pool)
+            bot_app.bot_data['permission_manager'] = perm_manager
+            
+            # Add default super admin from config
+            if ADMIN_ID:
+                try:
+                    perm_manager.add_admin(ADMIN_ID, AdminRole.SUPER_ADMIN, assigned_by=ADMIN_ID)
+                    logger.info(f"✅ Super admin initialized: {ADMIN_ID}")
+                except Exception as e:
+                    logger.warning(f"Could not add super admin: {e}")
+            
+            # Registration conversation handler
+            registration_handler = ConversationHandler(
+                entry_points=[CommandHandler("start", cmd_start)],
+                states={
+                    REGISTRATION_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, registration_name)],
+                    REGISTRATION_LANGUAGE: [MessageHandler(filters.ALL, registration_language)]
+                },
+                fallbacks=[CommandHandler("cancel", cancel_registration)],
+                allow_reentry=True
+            )
+            
+            bot_app.add_handler(registration_handler)
+            bot_app.add_handler(CommandHandler("app", cmd_app))
+            bot_app.add_handler(CommandHandler("help", cmd_help))
+            bot_app.add_handler(CommandHandler("new", cmd_new))
+            bot_app.add_handler(CommandHandler("top", cmd_top))
+            bot_app.add_handler(CommandHandler("stats", cmd_stats))
+            bot_app.add_handler(CommandHandler("admin", cmd_admin))
+            bot_app.add_handler(CommandHandler("sync_db", _cmd_sync_db))
             bot_app.add_handler(CommandHandler("fullscan", _cmd_fullscan))
 
             # Forum topic event handlers (new/renamed topics → auto-register)
             bot_app.add_handler(
-                MessageHandler(filters.StatusUpdate.FORUM_TOPIC_CREATED, handle_new_topic)
-            )
+                MessageHandler(
+                    filters.StatusUpdate.FORUM_TOPIC_CREATED,
+                    handle_new_topic))
             bot_app.add_handler(
-                MessageHandler(filters.StatusUpdate.FORUM_TOPIC_EDITED, handle_edited_topic)
-            )
+                MessageHandler(
+                    filters.StatusUpdate.FORUM_TOPIC_EDITED,
+                    handle_edited_topic))
 
             for _h in get_callback_handlers():
                 bot_app.add_handler(_h)
 
             _bot_task = asyncio.create_task(_run_bot(bot_app))
-            logger.info("✅ Telegram bot started")
+            logger.info("✅ Telegram bot started with ConversationHandler")
         except Exception as e:
             logger.error(f"Bot start error: {e}", exc_info=True)
 
-    _sync_task       = asyncio.create_task(_periodic_db_push())
+    _sync_task = asyncio.create_task(_periodic_db_push())
     _smart_sync_task = asyncio.create_task(_periodic_smart_sync())
-    _autoscan_task   = asyncio.create_task(_periodic_autoscan())
-    
+    _autoscan_task = asyncio.create_task(_periodic_autoscan())
+
     # Run catch-up sync on startup
     asyncio.create_task(_startup_catch_up())
-    
+
     yield
 
-    if _bot_task:         _bot_task.cancel()
-    if _sync_task:        _sync_task.cancel()
-    if _smart_sync_task:  _smart_sync_task.cancel()
-    if _autoscan_task:    _autoscan_task.cancel()
+    if _bot_task:
+        _bot_task.cancel()
+    if _sync_task:
+        _sync_task.cancel()
+    if _smart_sync_task:
+        _smart_sync_task.cancel()
+    if _autoscan_task:
+        _autoscan_task.cancel()
     await stop_pyrogram()
 
 
@@ -101,11 +173,12 @@ async def _cmd_fullscan(update, context):
         return
     msg = await update.effective_message.reply_text("🔍 جارٍ مسح المجموعة الخاصة... قد يستغرق دقائق.")
     try:
-        user_bot = _pyro_clients[1] if len(_pyro_clients) > 1 else _pyro_clients[0]
+        user_bot = _pyro_clients[1] if len(
+            _pyro_clients) > 1 else _pyro_clients[0]
         results = await run_full_scan(user_bot)
         s = db.get_stats()
         await msg.edit_text(
-            f"✅ اكتمل المسح!\n\n"
+            "✅ اكتمل المسح!\n\n"
             f"📋 مواضيع: {results['topics_scanned']} | ➕ جديد: {results['registered']} | "
             f"🎬 ملفات: {results['files_attached']} | ⚠️ أخطاء: {results['errors']}\n\n"
             f"📊 المكتبة: {s['movies_count']} فيلم | {s['series_count']} مسلسل | {s['episodes_count']} حلقة"
@@ -158,12 +231,12 @@ async def _startup_catch_up():
         if _pyro_clients:
             logger.info("🔄 Running startup catch-up sync...")
             # Use user bot (s1) instead of bot account for smart sync
-            user_bot = _pyro_clients[1] if len(_pyro_clients) > 1 else _pyro_clients[0]
+            user_bot = _pyro_clients[1] if len(
+                _pyro_clients) > 1 else _pyro_clients[0]
             results = await run_catch_up_sync(user_bot)
             logger.info(
                 f"✅ Catch-up complete: scanned={results['messages_scanned']} "
-                f"registered={results['registered']} files={results['files_attached']}"
-            )
+                f"registered={results['registered']} files={results['files_attached']}")
         else:
             logger.warning("Catch-up skipped: no Pyrogram clients available")
     except Exception as e:
@@ -180,17 +253,18 @@ async def _periodic_smart_sync():
             if _pyro_clients:
                 logger.info("🔄 Smart sync: checking for new content...")
                 # Use user bot (s1) instead of bot account for smart sync
-                user_bot = _pyro_clients[1] if len(_pyro_clients) > 1 else _pyro_clients[0]
+                user_bot = _pyro_clients[1] if len(
+                    _pyro_clients) > 1 else _pyro_clients[0]
                 results = await run_smart_sync(user_bot)
                 if results['registered'] > 0 or results['files_attached'] > 0:
                     logger.info(
                         f"✅ Smart sync found updates: registered={results['registered']} "
-                        f"files={results['files_attached']}"
-                    )
+                        f"files={results['files_attached']}")
                 else:
                     logger.debug("Smart sync: no new content")
             else:
-                logger.warning("Smart sync skipped: no Pyrogram clients available")
+                logger.warning(
+                    "Smart sync skipped: no Pyrogram clients available")
         except Exception as e:
             logger.error(f"Smart sync error: {e}", exc_info=True)
         await asyncio.sleep(300)  # 5 minutes
@@ -204,29 +278,84 @@ async def _periodic_autoscan():
             from app.stream import _pyro_clients
             from app.scanner import run_full_scan
             if _pyro_clients:
-                logger.info("🔍 Full scan: starting comprehensive group scan...")
-                user_bot = _pyro_clients[1] if len(_pyro_clients) > 1 else _pyro_clients[0]
+                logger.info(
+                    "🔍 Full scan: starting comprehensive group scan...")
+                user_bot = _pyro_clients[1] if len(
+                    _pyro_clients) > 1 else _pyro_clients[0]
                 results = await run_full_scan(user_bot)
                 logger.info(
                     f"✅ Full scan complete: topics={results['topics_scanned']} "
                     f"new={results['registered']} files={results['files_attached']} "
-                    f"errors={results['errors']}"
-                )
+                    f"errors={results['errors']}")
             else:
-                logger.warning("Full scan skipped: no Pyrogram clients available")
+                logger.warning(
+                    "Full scan skipped: no Pyrogram clients available")
         except Exception as e:
             logger.error(f"Full scan error: {e}", exc_info=True)
         await asyncio.sleep(3600)  # 1 hour (changed from 2 hours)
 
 
 app = FastAPI(title="PopCorn API 🍿", version="4.2.0", lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"])
+
+# Register error handlers
+
+register_error_handlers(app)
 
 # Security middleware - validate all requests
+
+
 @app.middleware("http")
 async def security_middleware(request: Request, call_next):
     """Security validation middleware"""
     await validate_request_security(request)
+    response = await call_next(request)
+    return response
+
+
+# Subscription middleware - check channel subscription for mini-app users
+@app.middleware("http")
+async def subscription_middleware(request: Request, call_next):
+    """Check subscription status for mini-app API requests"""
+    # Skip subscription check for certain paths
+    skip_paths = [
+        "/",
+        "/health",
+        "/api/stats",
+        "/api/subscription/status",
+        "/static"]
+
+    if any(request.url.path.startswith(path) for path in skip_paths):
+        response = await call_next(request)
+        return response
+
+    # Only check subscription if required
+    if SUBSCRIPTION_REQUIRED:
+        # Get user_id from query params or headers
+        user_id = request.query_params.get(
+            "user_id") or request.headers.get("X-User-ID")
+
+        if user_id:
+            try:
+                user_id = int(user_id)
+                # Check subscription status from database
+                sub_status = db.get_user_subscription_status(user_id)
+
+                if not sub_status.get("is_subscribed", False):
+                    return JSONResponse(
+                        status_code=403,
+                        content={
+                            "error": "subscription_required",
+                            "message": "You must subscribe to our channel to use this service",
+                            "channel_url": "https://t.me/PopCornAppChannel",
+                            "action": "subscribe"})
+            except (ValueError, TypeError):
+                pass  # Invalid user_id, let request proceed
+
     response = await call_next(request)
     return response
 
@@ -247,8 +376,11 @@ def _j(obj: dict, fields: list[str]):
 @app.get("/api/health")
 async def health():
     from app.stream import _pyro_clients
-    return {"status": "ok", "service": "PopCorn API 🍿", "pyrogram": bool(_pyro_clients),
-            "pyrogram_clients": len(_pyro_clients)}
+    return {
+        "status": "ok",
+        "service": "PopCorn API 🍿",
+        "pyrogram": bool(_pyro_clients),
+        "pyrogram_clients": len(_pyro_clients)}
 
 
 @app.get("/api/stats")
@@ -266,7 +398,8 @@ async def genres():
     cached = cache_get("genres")
     if cached is not None:
         return cached
-    import sqlite3 as sq, json as js
+    import sqlite3 as sq
+    import json as js
     from app.config import DB_PATH
     conn = sq.connect(DB_PATH)
     try:
@@ -296,20 +429,21 @@ async def featured():
         return cached
     import sqlite3 as sq
     from app.config import DB_PATH
-    conn = sq.connect(DB_PATH); conn.row_factory = sq.Row
+    conn = sq.connect(DB_PATH)
+    conn.row_factory = sq.Row
     try:
         movies = [dict(r) for r in conn.execute(
             "SELECT id,'movie' AS type,title,title_ar,poster_path,backdrop_path,rating,"
             "release_date AS date,overview,overview_ar,genres,1 AS has_file "
             "FROM movies WHERE backdrop_path!='' AND file_id IS NOT NULL ORDER BY rating DESC LIMIT 8"
         ).fetchall()]
-        series = [dict(r) for r in conn.execute(
-            "SELECT s.id,'series' AS type,s.title,s.title_ar,s.poster_path,s.backdrop_path,"
-            "s.rating,s.first_air_date AS date,s.overview,s.overview_ar,s.genres,"
-            "CASE WHEN EXISTS(SELECT 1 FROM episodes e WHERE e.series_id=s.id AND e.file_id IS NOT NULL) "
-            "     THEN 1 ELSE 0 END AS has_file "
-            "FROM series s WHERE s.backdrop_path!='' ORDER BY s.rating DESC LIMIT 4"
-        ).fetchall()]
+        series = [
+            dict(r) for r in conn.execute(
+                "SELECT s.id,'series' AS type,s.title,s.title_ar,s.poster_path,s.backdrop_path,"
+                "s.rating,s.first_air_date AS date,s.overview,s.overview_ar,s.genres,"
+                "CASE WHEN EXISTS(SELECT 1 FROM episodes e WHERE e.series_id=s.id AND e.file_id IS NOT NULL) "
+                "     THEN 1 ELSE 0 END AS has_file "
+                "FROM series s WHERE s.backdrop_path!='' ORDER BY s.rating DESC LIMIT 4").fetchall()]
         items = (movies + series)[:12]
         for it in items:
             _j(it, ["genres"])
@@ -333,20 +467,32 @@ async def list_movies(
         return cached
     import sqlite3 as sq
     from app.config import DB_PATH
-    conn = sq.connect(DB_PATH); conn.row_factory = sq.Row
+    conn = sq.connect(DB_PATH)
+    conn.row_factory = sq.Row
     try:
-        q = "SELECT * FROM movies WHERE 1=1"; p: list = []
-        if genre: q += " AND genres LIKE ?"; p.append(f"%{genre}%")
+        q = "SELECT * FROM movies WHERE 1=1"
+        p: list = []
+        if genre:
+            q += " AND genres LIKE ?"
+            p.append(f"%{genre}%")
         if search:
             term = f"%{search}%"
             q += " AND (title LIKE ? OR title_ar LIKE ? OR LOWER(title) LIKE LOWER(?) OR LOWER(title_ar) LIKE LOWER(?))"
             p += [term, term, term, term]
-        if has_file is True: q += " AND file_id IS NOT NULL"
-        elif has_file is False: q += " AND file_id IS NULL"
-        order = {"newest": "created_at DESC", "rating": "rating DESC", "title": "title_ar ASC"}.get(sort, "created_at DESC")
+        if has_file is True:
+            q += " AND file_id IS NOT NULL"
+        elif has_file is False:
+            q += " AND file_id IS NULL"
+        order = {
+            "newest": "created_at DESC",
+            "rating": "rating DESC",
+            "title": "title_ar ASC"}.get(
+            sort,
+            "created_at DESC")
         count_q = q.replace("SELECT *", "SELECT COUNT(*)")
         total = conn.execute(count_q, p).fetchone()[0]
-        q += f" ORDER BY {order} LIMIT ? OFFSET ?"; p += [limit, offset]
+        q += f" ORDER BY {order} LIMIT ? OFFSET ?"
+        p += [limit, offset]
         rows = [dict(r) for r in conn.execute(q, p).fetchall()]
     finally:
         conn.close()
@@ -366,8 +512,9 @@ async def get_movie(movie_id: str):
     if cached is not None:
         return cached
     m = db.get_movie(movie_id=movie_id)
-    if not m: raise HTTPException(404, "Movie not found")
-    _j(m, ["genres", "cast"])
+    if not m:
+        raise HTTPException(404, "Movie not found")
+    _j(m, ["genres", "cast", "available_qualities"])
     if m.get("file_id"):
         m["stream_url"] = f"/api/stream/{m['file_id']}"
         m["has_file"] = True
@@ -375,38 +522,357 @@ async def get_movie(movie_id: str):
     else:
         m["has_file"] = False
         m["stream_url"] = None
+    
+    # Ensure available_qualities is always a list
+    if not m.get("available_qualities"):
+        m["available_qualities"] = []
+    
     cache_set(cache_key, m, 60)
     return m
+
+@app.get("/api/movies/{movie_id}/cast")
+async def get_movie_cast(movie_id: str):
+    """Get cast information for a movie"""
+    cache_key = f"movie_cast:{movie_id}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+    
+    # Get movie to find TMDB ID
+    m = db.get_movie(movie_id=movie_id)
+    if not m:
+        raise HTTPException(404, "Movie not found")
+    
+    tmdb_id = m.get("tmdb_id")
+    if not tmdb_id:
+        return {"cast": []}
+    
+    # Fetch cast from TMDB
+    from app.tmdb import fetch_movie_cast
+
+@app.get("/api/content/{content_id}/qualities")
+async def get_content_qualities(content_id: str):
+    """Get available video qualities for a movie or episode"""
+    cache_key = f"qualities:{content_id}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+    
+    # Try to find as movie first
+    content = db.get_movie(movie_id=content_id)
+    content_type = "movie"
+    
+    # If not found, try as episode (content_id format: series_id_s##e##)
+    if not content:
+        # Parse episode ID format
+        import re
+        ep_match = re.match(r'(.+)_s(\d+)e(\d+)', content_id)
+        if ep_match:
+            series_id, season, episode = ep_match.groups()
+            content = db.get_episode(series_id, int(season), int(episode))
+            content_type = "episode"
+    
+    if not content:
+        raise HTTPException(404, "Content not found")
+    
+    # Parse available_qualities
+    qualities = content.get("available_qualities", "[]")
+    if isinstance(qualities, str):
+        try:
+            qualities = json.loads(qualities)
+        except:
+            qualities = []
+    
+    if not qualities:
+        qualities = ["STANDARD"]  # Fallback
+    
+    result = {
+        "content_id": content_id,
+        "content_type": content_type,
+        "available_qualities": qualities,
+        "has_file": bool(content.get("file_id"))
+    }
+    
+    cache_set(cache_key, result, 120)
+    return result
+    cast = await fetch_movie_cast(tmdb_id)
+    
+    result = {"cast": cast}
+    cache_set(cache_key, result, 300)  # Cache for 5 minutes
+    return result
+
+
+@app.get("/api/movies/{movie_id}/reviews")
+async def get_movie_reviews_legacy(movie_id: str):
+    """Get reviews for a movie (Legacy TMDB endpoint - deprecated)"""
+    # Redirect to new reviews endpoint
+    return await get_reviews("movie", movie_id)
 
 
 @app.get("/api/series")
 async def list_series(
-    limit: int = Query(24, ge=1, le=100), offset: int = Query(0, ge=0),
-    genre: str = Query(None), search: str = Query(None), sort: str = Query("newest"),
+        limit: int = Query(
+            24,
+            ge=1,
+            le=100),
+    offset: int = Query(
+            0,
+            ge=0),
+        genre: str = Query(None),
+        search: str = Query(None),
+        sort: str = Query("newest"),
 ):
     cache_key = f"series_list:{limit}:{offset}:{genre}:{search}:{sort}"
     cached = cache_get(cache_key)
     if cached is not None:
         return cached
+
+# ══════════════════════════════════════════════════════════════════════
+# Reviews System Endpoints
+# ══════════════════════════════════════════════════════════════════════
+
+class ReviewRequest(BaseModel):
+    rating: int
+    comment: str | None = None
+
+
+@app.post("/api/reviews")
+@rate_limit(max_requests=10, window_seconds=60)
+async def add_review(request: Request, review_data: ReviewRequest):
+    """Add or update a review for content"""
+    # Get user info from Telegram WebApp
+    init_data = request.headers.get("X-Telegram-Init-Data")
+    if not init_data:
+        raise HTTPException(401, "Unauthorized - Telegram data required")
+    
+    # Parse Telegram user data (simplified - in production, validate the hash)
+    try:
+        from urllib.parse import parse_qs
+        params = parse_qs(init_data)
+        user_data = params.get("user", [None])[0]
+        if user_data:
+            import json
+            user = json.loads(user_data)
+            user_id = user.get("id")
+            username = user.get("username") or user.get("first_name", "User")
+        else:
+            raise HTTPException(401, "Invalid user data")
+    except Exception as e:
+        logger.error(f"Error parsing Telegram data: {e}")
+        raise HTTPException(401, "Invalid Telegram data")
+    
+    # Get content info from query params
+    content_type = request.query_params.get("content_type")
+    content_id = request.query_params.get("content_id")
+    
+    if not content_type or not content_id:
+        raise HTTPException(400, "content_type and content_id are required")
+    
+    if content_type not in ["movie", "series"]:
+        raise HTTPException(400, "content_type must be 'movie' or 'series'")
+    
+    if not 1 <= review_data.rating <= 10:
+        raise HTTPException(400, "rating must be between 1 and 10")
+    
+    # Check if user exists and is not blocked
+    user_info = db.get_user(user_id)
+    if user_info and user_info.get("is_blocked"):
+        raise HTTPException(403, "User is blocked")
+    
+    # Create or update user if needed
+    if not user_info:
+        db.create_or_update_user(user_id, username=username)
+    
+    # Add the review
+    db.add_review(
+        user_id=user_id,
+        content_type=content_type,
+        content_id=content_id,
+        rating=review_data.rating,
+        comment=review_data.comment,
+        username=username
+    )
+    
+    # Clear cache
+    cache_clear_prefix(f"reviews:{content_type}:{content_id}")
+    
+    return {"success": True, "message": "Review added successfully"}
+
+
+@app.get("/api/reviews/{content_type}/{content_id}")
+async def get_reviews(content_type: str, content_id: str,
+                     limit: int = 50,
+                     offset: int = 0):
+    """Get reviews for specific content"""
+    if content_type not in ["movie", "series"]:
+        raise HTTPException(400, "content_type must be 'movie' or 'series'")
+    
+    # Validate and constrain parameters
+    limit = max(1, min(100, limit))  # Between 1 and 100
+    offset = max(0, offset)  # Non-negative
+    
+    cache_key = f"reviews:{content_type}:{content_id}:{limit}:{offset}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+    
+    # Get reviews
+    reviews = db.get_reviews(content_type, content_id, limit, offset)
+    
+    # Get statistics
+    stats = db.get_reviews_stats(content_type, content_id)
+    
+    result = {
+        "reviews": reviews,
+        "stats": stats,
+        "total": stats.get("total_reviews", 0),
+        "limit": limit,
+        "offset": offset
+    }
+    
+    cache_set(cache_key, result, 60)  # Cache for 1 minute
+    return result
+
+
+@app.put("/api/reviews/{review_id}")
+@rate_limit(max_requests=10, window_seconds=60)
+async def update_review(request: Request, review_id: int, review_data: ReviewRequest):
+    """Update an existing review"""
+    # Get user info from Telegram WebApp
+    init_data = request.headers.get("X-Telegram-Init-Data")
+    if not init_data:
+        raise HTTPException(401, "Unauthorized - Telegram data required")
+    
+    try:
+        from urllib.parse import parse_qs
+        params = parse_qs(init_data)
+        user_data = params.get("user", [None])[0]
+        if user_data:
+            import json
+            user = json.loads(user_data)
+            user_id = user.get("id")
+        else:
+            raise HTTPException(401, "Invalid user data")
+    except Exception as e:
+        logger.error(f"Error parsing Telegram data: {e}")
+        raise HTTPException(401, "Invalid Telegram data")
+    
+    if not 1 <= review_data.rating <= 10:
+        raise HTTPException(400, "rating must be between 1 and 10")
+    
+    # Get the review to verify ownership
+    review = db.get_review_by_id(review_id)
+    if not review:
+        raise HTTPException(404, "Review not found")
+    
+    if review["user_id"] != user_id:
+        raise HTTPException(403, "You can only update your own reviews")
+    
+    # Update the review
+    success = db.update_review(review_id, review_data.rating, review_data.comment)
+    
+    if not success:
+        raise HTTPException(500, "Failed to update review")
+    
+    # Clear cache
+    cache_clear_prefix(f"reviews:{review['content_type']}:{review['content_id']}")
+    
+    return {"success": True, "message": "Review updated successfully"}
+
+
+@app.delete("/api/reviews/{review_id}")
+@rate_limit(max_requests=10, window_seconds=60)
+async def delete_review(request: Request, review_id: int):
+    """Delete a review"""
+    # Get user info from Telegram WebApp
+    init_data = request.headers.get("X-Telegram-Init-Data")
+    if not init_data:
+        raise HTTPException(401, "Unauthorized - Telegram data required")
+    
+    try:
+        from urllib.parse import parse_qs
+        params = parse_qs(init_data)
+        user_data = params.get("user", [None])[0]
+        if user_data:
+            import json
+            user = json.loads(user_data)
+            user_id = user.get("id")
+        else:
+            raise HTTPException(401, "Invalid user data")
+    except Exception as e:
+        logger.error(f"Error parsing Telegram data: {e}")
+        raise HTTPException(401, "Invalid Telegram data")
+    
+    # Get the review to verify ownership
+    review = db.get_review_by_id(review_id)
+    if not review:
+        raise HTTPException(404, "Review not found")
+    
+    if review["user_id"] != user_id:
+        raise HTTPException(403, "You can only delete your own reviews")
+    
+    # Delete the review
+    success = db.delete_review(review_id)
+    
+    if not success:
+        raise HTTPException(500, "Failed to delete review")
+    
+    # Clear cache
+    cache_clear_prefix(f"reviews:{review['content_type']}:{review['content_id']}")
+    
+    return {"success": True, "message": "Review deleted successfully"}
+
+
+@app.get("/api/reviews/user/{user_id}")
+async def get_user_reviews(user_id: int,
+                          limit: int = Query(50, ge=1, le=100),
+                          offset: int = Query(0, ge=0)):
+    """Get all reviews by a specific user"""
+    cache_key = f"user_reviews:{user_id}:{limit}:{offset}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+    
+    reviews = db.get_user_reviews(user_id, limit, offset)
+    
+    result = {
+        "reviews": reviews,
+        "total": len(reviews),
+        "limit": limit,
+        "offset": offset
+    }
+    
+    cache_set(cache_key, result, 60)
+    return result
+
     import sqlite3 as sq
     from app.config import DB_PATH
-    conn = sq.connect(DB_PATH); conn.row_factory = sq.Row
+    conn = sq.connect(DB_PATH)
+    conn.row_factory = sq.Row
     try:
-        where = "1=1"; p: list = []
-        if genre: where += " AND s.genres LIKE ?"; p.append(f"%{genre}%")
+        where = "1=1"
+        p: list = []
+        if genre:
+            where += " AND s.genres LIKE ?"
+            p.append(f"%{genre}%")
         if search:
             term = f"%{search}%"
             where += " AND (s.title LIKE ? OR s.title_ar LIKE ? OR LOWER(s.title) LIKE LOWER(?) OR LOWER(s.title_ar) LIKE LOWER(?))"
             p += [term, term, term, term]
-        order = {"newest": "s.created_at DESC", "rating": "s.rating DESC", "title": "s.title_ar ASC"}.get(sort, "s.created_at DESC")
+        # Fixed: Validate sort parameter against whitelist
+        allowed_sorts = {
+            "newest": "s.created_at DESC",
+            "rating": "s.rating DESC",
+            "title": "s.title_ar ASC"
+        }
+        order = allowed_sorts.get(sort, "s.created_at DESC")
         count_q = f"SELECT COUNT(*) FROM series s WHERE {where}"
         total = conn.execute(count_q, p).fetchone()[0]
         q = (
-            f"SELECT s.*, "
-            f"CASE WHEN EXISTS(SELECT 1 FROM episodes e WHERE e.series_id=s.id AND e.file_id IS NOT NULL) "
-            f"     THEN 1 ELSE 0 END AS has_file "
-            f"FROM series s WHERE {where} ORDER BY {order} LIMIT ? OFFSET ?"
-        )
+            "SELECT s.*, "
+            "CASE WHEN EXISTS(SELECT 1 FROM episodes e WHERE e.series_id=s.id AND e.file_id IS NOT NULL) "
+            "     THEN 1 ELSE 0 END AS has_file "
+            f"FROM series s WHERE {where} ORDER BY {order} LIMIT ? OFFSET ?")
         p_full = p + [limit, offset]
         rows = [dict(r) for r in conn.execute(q, p_full).fetchall()]
     finally:
@@ -427,17 +893,24 @@ async def get_series(series_id: str):
     if cached is not None:
         return cached
     s = db.get_series(series_id=series_id)
-    if not s: raise HTTPException(404, "Series not found")
+    if not s:
+        raise HTTPException(404, "Series not found")
     _j(s, ["genres", "cast"])
     episodes = db.get_episodes(series_id)
     seasons: dict[int, list] = {}
     for ep in episodes:
-        ep["stream_url"] = f"/api/stream/{ep['file_id']}" if ep.get("file_id") else None
+        _j(ep, ["available_qualities"])
+        ep["stream_url"] = f"/api/stream/{ep['file_id']}" if ep.get(
+            "file_id") else None
         ep["has_file"] = bool(ep.get("file_id"))
+        # Ensure available_qualities is always a list
+        if not ep.get("available_qualities"):
+            ep["available_qualities"] = []
         seasons.setdefault(ep["season_number"], []).append(ep)
     s["seasons"] = {str(k): v for k, v in sorted(seasons.items())}
     s["total_seasons_available"] = len(seasons)
-    s["has_file"] = any(ep.get("has_file") for eps in seasons.values() for ep in eps)
+    s["has_file"] = any(ep.get("has_file")
+                        for eps in seasons.values() for ep in eps)
     cache_set(cache_key, s, 60)
     return s
 
@@ -446,9 +919,397 @@ async def get_series(series_id: str):
 async def series_episodes(series_id: str, season: int = Query(None)):
     eps = db.get_episodes(series_id, season_number=season)
     for ep in eps:
-        ep["stream_url"] = f"/api/stream/{ep['file_id']}" if ep.get("file_id") else None
+        _j(ep, ["available_qualities"])
+        ep["stream_url"] = f"/api/stream/{ep['file_id']}" if ep.get(
+            "file_id") else None
         ep["has_file"] = bool(ep.get("file_id"))
+        # Ensure available_qualities is always a list
+        if not ep.get("available_qualities"):
+            ep["available_qualities"] = []
     return {"items": eps}
+
+
+@app.get("/api/series/{series_id}/cast")
+async def get_series_cast(series_id: str):
+    """Get cast information for a series"""
+    cache_key = f"series_cast:{series_id}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+    
+    # Get series to find TMDB ID
+    s = db.get_series(series_id=series_id)
+    if not s:
+        raise HTTPException(404, "Series not found")
+    
+    tmdb_id = s.get("tmdb_id")
+    if not tmdb_id:
+        return {"cast": []}
+    
+    # Fetch cast from TMDB
+    from app.tmdb import fetch_series_cast
+    cast = await fetch_series_cast(tmdb_id)
+    
+    result = {"cast": cast}
+    cache_set(cache_key, result, 300)  # Cache for 5 minutes
+    return result
+
+
+@app.get("/api/series/{series_id}/reviews")
+async def get_series_reviews(series_id: str):
+    """Get reviews for a series"""
+    cache_key = f"series_reviews:{series_id}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+    
+    # Get series to find TMDB ID
+    s = db.get_series(series_id=series_id)
+    if not s:
+        raise HTTPException(404, "Series not found")
+    
+    tmdb_id = s.get("tmdb_id")
+    if not tmdb_id:
+        return {"reviews": []}
+    
+    # Fetch reviews from TMDB
+    from app.tmdb import fetch_series_reviews
+    reviews = await fetch_series_reviews(tmdb_id)
+    
+    result = {"reviews": reviews}
+    cache_set(cache_key, result, 300)  # Cache for 5 minutes
+    return result
+    return {"items": eps}
+
+# ══════════════════════════════════════════════════════════════════════
+# New API Endpoints - Trending, Popular, Latest, Rooms
+# ══════════════════════════════════════════════════════════════════════
+
+
+@app.get("/api/trending")
+@rate_limit(max_requests=100, window_seconds=60)
+async def get_trending(
+    request: Request,
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=50),
+    content_type: str = Query("all")  # all, movie, series
+):
+    """Get trending movies and series based on views and ratings"""
+    cache_key = f"trending:{page}:{limit}:{content_type}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    import sqlite3 as sq
+    from app.config import DB_PATH
+    conn = sq.connect(DB_PATH)
+    conn.row_factory = sq.Row
+
+    try:
+        offset = (page - 1) * limit
+        items = []
+
+        if content_type in ["all", "movie"]:
+            # Get trending movies (high rating + recent views)
+            movies = conn.execute("""
+                SELECT m.*, 'movie' AS type,
+                       COALESCE(v.view_count, 0) AS views,
+                       (m.rating * 10 + COALESCE(v.view_count, 0) * 0.1) AS trending_score
+                FROM movies m
+                LEFT JOIN (
+                    SELECT content_id, COUNT(*) AS view_count
+                    FROM view_logs
+                    WHERE content_type = 'movie'
+                    AND timestamp > datetime('now', '-7 days')
+                    GROUP BY content_id
+                ) v ON m.id = v.content_id
+                WHERE m.file_id IS NOT NULL
+                ORDER BY trending_score DESC
+                LIMIT ?
+            """, (limit if content_type == "movie" else limit // 2,)).fetchall()
+
+            for m in movies:
+                item = dict(m)
+                _j(item, ["genres", "cast"])
+                item["has_file"] = bool(item.get("file_id"))
+                items.append(item)
+
+        if content_type in ["all", "series"]:
+            # Get trending series
+            series = conn.execute("""
+                SELECT s.*, 'series' AS type,
+                       COALESCE(v.view_count, 0) AS views,
+                       (s.rating * 10 + COALESCE(v.view_count, 0) * 0.1) AS trending_score,
+                       CASE WHEN EXISTS(
+                           SELECT 1 FROM episodes e
+                           WHERE e.series_id = s.id AND e.file_id IS NOT NULL
+                       ) THEN 1 ELSE 0 END AS has_file
+                FROM series s
+                LEFT JOIN (
+                    SELECT content_id, COUNT(*) AS view_count
+                    FROM view_logs
+                    WHERE content_type = 'series'
+                    AND timestamp > datetime('now', '-7 days')
+                    GROUP BY content_id
+                ) v ON s.id = v.content_id
+                ORDER BY trending_score DESC
+                LIMIT ?
+            """, (limit if content_type == "series" else limit // 2,)).fetchall()
+
+            for s in series:
+                item = dict(s)
+                _j(item, ["genres", "cast"])
+                item["has_file"] = bool(item.get("has_file"))
+                items.append(item)
+
+        # Sort by trending score and apply pagination
+        items.sort(key=lambda x: x.get("trending_score", 0), reverse=True)
+        total = len(items)
+        items = items[offset:offset + limit]
+
+    finally:
+        conn.close()
+
+    result = {
+        "items": items,
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "has_more": offset + limit < total
+    }
+    cache_set(cache_key, result, 60)  # Cache for 1 minute
+    return result
+
+
+@app.get("/api/popular")
+@rate_limit(max_requests=100, window_seconds=60)
+async def get_popular(
+    request: Request,
+    content_type: str = Query("all"),  # all, movie, series
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=50)
+):
+    """Get popular content based on ratings and view count"""
+    cache_key = f"popular:{content_type}:{page}:{limit}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    import sqlite3 as sq
+    from app.config import DB_PATH
+    conn = sq.connect(DB_PATH)
+    conn.row_factory = sq.Row
+
+    try:
+        offset = (page - 1) * limit
+        items = []
+
+        if content_type in ["all", "movie"]:
+            movies = conn.execute("""
+                SELECT m.*, 'movie' AS type,
+                       COALESCE(v.total_views, 0) AS total_views
+                FROM movies m
+                LEFT JOIN (
+                    SELECT content_id, COUNT(*) AS total_views
+                    FROM view_logs
+                    WHERE content_type = 'movie'
+                    GROUP BY content_id
+                ) v ON m.id = v.content_id
+                WHERE m.file_id IS NOT NULL AND m.rating >= 6.0
+                ORDER BY m.rating DESC, total_views DESC
+                LIMIT ?
+            """, (limit if content_type == "movie" else limit // 2,)).fetchall()
+
+            for m in movies:
+                item = dict(m)
+                _j(item, ["genres", "cast"])
+                item["has_file"] = True
+                items.append(item)
+
+        if content_type in ["all", "series"]:
+            series = conn.execute("""
+                SELECT s.*, 'series' AS type,
+                       COALESCE(v.total_views, 0) AS total_views,
+                       CASE WHEN EXISTS(
+                           SELECT 1 FROM episodes e
+                           WHERE e.series_id = s.id AND e.file_id IS NOT NULL
+                       ) THEN 1 ELSE 0 END AS has_file
+                FROM series s
+                LEFT JOIN (
+                    SELECT content_id, COUNT(*) AS total_views
+                    FROM view_logs
+                    WHERE content_type = 'series'
+                    GROUP BY content_id
+                ) v ON s.id = v.content_id
+                WHERE s.rating >= 6.0
+                ORDER BY s.rating DESC, total_views DESC
+                LIMIT ?
+            """, (limit if content_type == "series" else limit // 2,)).fetchall()
+
+            for s in series:
+                item = dict(s)
+                _j(item, ["genres", "cast"])
+                item["has_file"] = bool(item.get("has_file"))
+                items.append(item)
+
+        total = len(items)
+        items = items[offset:offset + limit]
+
+    finally:
+        conn.close()
+
+    result = {
+        "items": items,
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "has_more": offset + limit < total
+    }
+    cache_set(cache_key, result, 120)  # Cache for 2 minutes
+    return result
+
+
+@app.get("/api/latest")
+@rate_limit(max_requests=100, window_seconds=60)
+async def get_latest(
+    request: Request,
+    content_type: str = Query("all"),  # all, movie, series
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=50)
+):
+    """Get latest added content"""
+    cache_key = f"latest:{content_type}:{page}:{limit}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    import sqlite3 as sq
+    from app.config import DB_PATH
+    conn = sq.connect(DB_PATH)
+    conn.row_factory = sq.Row
+
+    try:
+        offset = (page - 1) * limit
+        items = []
+
+        if content_type in ["all", "movie"]:
+            movies = conn.execute("""
+                SELECT *, 'movie' AS type
+                FROM movies
+                WHERE file_id IS NOT NULL
+                ORDER BY created_at DESC
+                LIMIT ?
+            """, (limit if content_type == "movie" else limit // 2,)).fetchall()
+
+            for m in movies:
+                item = dict(m)
+                _j(item, ["genres", "cast"])
+                item["has_file"] = True
+                items.append(item)
+
+        if content_type in ["all", "series"]:
+            series = conn.execute("""
+                SELECT s.*, 'series' AS type,
+                       CASE WHEN EXISTS(
+                           SELECT 1 FROM episodes e
+                           WHERE e.series_id = s.id AND e.file_id IS NOT NULL
+                       ) THEN 1 ELSE 0 END AS has_file
+                FROM series s
+                ORDER BY s.created_at DESC
+                LIMIT ?
+            """, (limit if content_type == "series" else limit // 2,)).fetchall()
+
+            for s in series:
+                item = dict(s)
+                _j(item, ["genres", "cast"])
+                item["has_file"] = bool(item.get("has_file"))
+                items.append(item)
+
+        # Sort by created_at
+        items.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+        total = len(items)
+        items = items[offset:offset + limit]
+
+    finally:
+        conn.close()
+
+    result = {
+        "items": items,
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "has_more": offset + limit < total
+    }
+    cache_set(cache_key, result, 60)  # Cache for 1 minute
+    return result
+
+
+@app.get("/api/rooms")
+@rate_limit(max_requests=50, window_seconds=60)
+async def get_rooms(
+    request: Request,
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=50),
+    status: str = Query("active")  # active, all
+):
+    """Get watch rooms list"""
+    from app.websocket_handler import connection_manager
+
+    # Get active rooms from WebSocket manager
+    active_rooms = connection_manager.get_active_rooms()
+
+    # Filter by status
+    if status == "active":
+        rooms = [r for r in active_rooms if r["user_count"] > 0]
+    else:
+        rooms = active_rooms
+
+    # Apply pagination
+    total = len(rooms)
+    offset = (page - 1) * limit
+    rooms = rooms[offset:offset + limit]
+
+    return {
+        "items": rooms,
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "has_more": offset + limit < total
+    }
+
+
+@app.get("/api/health/detailed")
+@rate_limit(max_requests=30, window_seconds=60)
+async def health_detailed(request: Request):
+    """Detailed health check with database and system status"""
+    from app.db_manager import check_database_health
+    from app.websocket_handler import get_websocket_stats
+    from app.stream import _pyro_clients
+
+    # Check database health
+    db_health = await check_database_health()
+
+    # Get WebSocket stats
+    ws_stats = get_websocket_stats()
+
+    # Get Pyrogram status
+    pyrogram_status = {
+        "available": bool(_pyro_clients),
+        "client_count": len(_pyro_clients) if _pyro_clients else 0
+    }
+
+    # Overall status
+    overall_status = "healthy" if db_health["status"] == "healthy" else "degraded"
+
+    return {
+        "status": overall_status,
+        "timestamp": time.time(),
+        "components": {
+            "database": db_health,
+            "websocket": ws_stats,
+            "pyrogram": pyrogram_status
+        }
+    }
 
 
 @app.get("/api/stream/{file_id:path}")
@@ -510,8 +1371,11 @@ async def debug_dialogs(request: Request):
             async for dlg in pyro.get_dialogs():
                 chat = dlg.chat
                 cid = getattr(chat, "id", None)
-                title = getattr(chat, "title", getattr(chat, "first_name", str(cid)))
-                dialogs.append({"id": cid, "title": title, "is_target": abs(cid or 0) == abs(PRIVATE_GROUP_ID)})
+                title = getattr(
+                    chat, "title", getattr(
+                        chat, "first_name", str(cid)))
+                dialogs.append({"id": cid, "title": title, "is_target": abs(
+                    cid or 0) == abs(PRIVATE_GROUP_ID)})
                 if len(dialogs) >= 20:
                     break
         except Exception as e:
@@ -536,21 +1400,27 @@ async def debug_forum_topics(request: Request):
         try:
             peer = await asyncio.wait_for(pyro.resolve_peer(PRIVATE_GROUP_ID), timeout=15)
             info["peer_resolved"] = True
-            info["peer_info"] = {"channel_id": getattr(peer,"channel_id",None), "access_hash": bool(getattr(peer,"access_hash",None))}
+            info["peer_info"] = {
+                "channel_id": getattr(
+                    peer, "channel_id", None), "access_hash": bool(
+                    getattr(
+                        peer, "access_hash", None))}
         except Exception as e:
             info["peer_error"] = f"{type(e).__name__}: {e}"
         # Test 2: raw GetForumTopics
         try:
             topics = await _get_forum_topics_raw(pyro)
             info["count"] = len(topics)
-            info["topics"] = [{"id": t.id, "title": t.title} for t in topics[:5]]
+            info["topics"] = [{"id": t.id, "title": t.title}
+                              for t in topics[:5]]
         except Exception as e:
             info["error"] = f"{type(e).__name__}: {e}"
         # Test 3: get_chat_history (limit=2)
         try:
             msgs = []
             async for m in pyro.get_chat_history(PRIVATE_GROUP_ID, limit=2):
-                msgs.append({"id": m.id, "type": str(type(m.media).__name__ if m.media else "text")})
+                msgs.append({"id": m.id, "type": str(
+                    type(m.media).__name__ if m.media else "text")})
             info["history_test"] = msgs
         except Exception as e:
             info["history_error"] = f"{type(e).__name__}: {e}"
@@ -573,19 +1443,22 @@ async def debug_pyro_errors(request: Request):
 @require_admin
 async def debug_config(request: Request):
     """Show non-sensitive config values for diagnostics."""
-    from app.config import PRIVATE_GROUP_ID, PUBLIC_CHANNEL_ID, ADMIN_ID, SESSION_1_API_ID, SESSION_2_API_ID
-    from app.config import MAIN_BOT_TOKEN, STREAM_BOT_1, STREAM_BOT_2
-    import re
+
 
 @app.get("/api/cache/stats")
 @require_admin
 async def cache_stats(request: Request):
     """Get cache statistics (Admin only)."""
     return cache_get_stats()
+
     def mask(v: str) -> str:
-        if not v: return "(not set)"
-        if re.match(r'^\d+:[A-Za-z0-9_-]{30,}$', v.strip()): return f"bot_token:{v[:10]}..."
-        if len(v) > 50: return f"session_string:{len(v)}chars"
+        import re as _re
+        if not v:
+            return "(not set)"
+        if _re.match(r'^\d+:[A-Za-z0-9_-]{30,}$', v.strip()):
+            return f"bot_token:{v[:10]}..."
+        if len(v) > 50:
+            return f"session_string:{len(v)}chars"
         return f"value:{v[:8]}..."
     return {
         "PRIVATE_GROUP_ID": PRIVATE_GROUP_ID,
@@ -601,20 +1474,28 @@ async def cache_stats(request: Request):
 
 @app.get("/api/search")
 @rate_limit(max_requests=30, window_seconds=60)
-async def search(request: Request, q: str = Query("", min_length=1), limit: int = Query(20)):
+async def search(
+        request: Request,
+        q: str = Query(
+            "",
+            min_length=1),
+        limit: int = Query(20)):
     import sqlite3 as sq
     from app.config import DB_PATH
-    conn = sq.connect(DB_PATH); conn.row_factory = sq.Row; term = f"%{q}%"
+    conn = sq.connect(DB_PATH)
+    conn.row_factory = sq.Row
+    term = f"%{q}%"
     try:
         movies = [dict(r) for r in conn.execute(
             "SELECT * FROM movies WHERE title LIKE ? OR title_ar LIKE ? OR LOWER(title) LIKE LOWER(?) OR LOWER(title_ar) LIKE LOWER(?) ORDER BY rating DESC LIMIT ?",
             [term, term, term, term, limit]).fetchall()]
-        series = [dict(r) for r in conn.execute(
-            "SELECT s.*, "
-            "CASE WHEN EXISTS(SELECT 1 FROM episodes e WHERE e.series_id=s.id AND e.file_id IS NOT NULL) "
-            "     THEN 1 ELSE 0 END AS has_file "
-            "FROM series s WHERE s.title LIKE ? OR s.title_ar LIKE ? OR LOWER(s.title) LIKE LOWER(?) OR LOWER(s.title_ar) LIKE LOWER(?) ORDER BY s.rating DESC LIMIT ?",
-            [term, term, term, term, limit]).fetchall()]
+        series = [
+            dict(r) for r in conn.execute(
+                "SELECT s.*, "
+                "CASE WHEN EXISTS(SELECT 1 FROM episodes e WHERE e.series_id=s.id AND e.file_id IS NOT NULL) "
+                "     THEN 1 ELSE 0 END AS has_file "
+                "FROM series s WHERE s.title LIKE ? OR s.title_ar LIKE ? OR LOWER(s.title) LIKE LOWER(?) OR LOWER(s.title_ar) LIKE LOWER(?) ORDER BY s.rating DESC LIMIT ?", [
+                    term, term, term, term, limit]).fetchall()]
     finally:
         conn.close()
     for m in movies:
@@ -657,10 +1538,10 @@ async def admin_fullscan(request: Request):
     from app.stream import _pyro_clients
     from app.scanner import run_full_scan
     from app import database as db
-    
+
     if not _pyro_clients:
         raise HTTPException(503, "No Pyrogram clients available")
-    
+
     user_bot = _pyro_clients[1] if len(_pyro_clients) > 1 else _pyro_clients[0]
     results = await run_full_scan(user_bot)
     s = db.get_stats()
@@ -676,14 +1557,14 @@ async def admin_fullscan(request: Request):
 async def admin_get_stats(request: Request):
     """Get comprehensive admin statistics."""
     from app.database import get_admin_stats
-    
+
     client_ip = request.client.host if request.client else "unknown"
     db.log_admin_action(
         admin_id=ADMIN_ID,
         action_type="view_stats",
         ip_address=client_ip
     )
-    
+
     return get_admin_stats()
 
 
@@ -698,14 +1579,14 @@ async def admin_get_users(
 ):
     """Get all users with filtering."""
     from app.database import get_all_users
-    
+
     result = get_all_users(
         limit=limit,
         offset=offset,
         search=search,
         blocked_only=blocked_only
     )
-    
+
     return result
 
 
@@ -714,11 +1595,11 @@ async def admin_get_users(
 async def admin_get_user(request: Request, user_id: int):
     """Get specific user details."""
     from app.database import get_user
-    
+
     user = get_user(user_id)
     if not user:
         raise HTTPException(404, "User not found")
-    
+
     return user
 
 
@@ -727,9 +1608,9 @@ async def admin_get_user(request: Request, user_id: int):
 async def admin_block_user(request: Request, user_id: int):
     """Block a user."""
     from app.database import block_user, log_admin_action
-    
+
     client_ip = request.client.host if request.client else "unknown"
-    
+
     try:
         block_user(user_id, blocked=True)
         log_admin_action(
@@ -760,9 +1641,9 @@ async def admin_block_user(request: Request, user_id: int):
 async def admin_unblock_user(request: Request, user_id: int):
     """Unblock a user."""
     from app.database import block_user, log_admin_action
-    
+
     client_ip = request.client.host if request.client else "unknown"
-    
+
     try:
         block_user(user_id, blocked=False)
         log_admin_action(
@@ -793,9 +1674,9 @@ async def admin_unblock_user(request: Request, user_id: int):
 async def admin_delete_user(request: Request, user_id: int):
     """Delete a user and all related data."""
     from app.database import delete_user, log_admin_action
-    
+
     client_ip = request.client.host if request.client else "unknown"
-    
+
     try:
         delete_user(user_id)
         log_admin_action(
@@ -844,12 +1725,12 @@ async def admin_get_content(
             "SELECT COUNT(*) FROM series" + (" WHERE title LIKE ? OR title_ar LIKE ?" if search else ""),
             [f"%{search}%", f"%{search}%"] if search else []
         ).fetchone()[0]
-    
+
     for item in items:
         _j(item, ["genres", "cast"])
         if content_type == "movie":
             item["has_file"] = bool(item.get("file_id"))
-    
+
     return {"items": items, "total": total, "content_type": content_type}
 
 
@@ -862,12 +1743,12 @@ async def admin_delete_content(
 ):
     """Delete movie or series."""
     from app.database import delete_content, log_admin_action
-    
+
     if content_type not in ["movie", "series"]:
         raise HTTPException(400, "Invalid content type")
-    
+
     client_ip = request.client.host if request.client else "unknown"
-    
+
     try:
         delete_content(content_type, content_id)
         log_admin_action(
@@ -879,7 +1760,9 @@ async def admin_delete_content(
             status="success"
         )
         cache_clear_all()
-        return {"ok": True, "message": f"{content_type.capitalize()} {content_id} deleted"}
+        return {
+            "ok": True,
+            "message": f"{content_type.capitalize()} {content_id} deleted"}
     except Exception as e:
         log_admin_action(
             admin_id=ADMIN_ID,
@@ -905,7 +1788,7 @@ async def admin_get_audit_logs(
 ):
     """Get audit logs with filtering."""
     from app.database import get_audit_logs
-    
+
     result = get_audit_logs(
         limit=limit,
         offset=offset,
@@ -914,7 +1797,7 @@ async def admin_get_audit_logs(
         start_date=start_date,
         end_date=end_date
     )
-    
+
     return result
 
 
@@ -928,7 +1811,7 @@ async def admin_get_notifications(
 ):
     """Get notifications."""
     from app.database import get_notifications
-    
+
     result = get_notifications(limit=limit, offset=offset, status=status)
     return result
 
@@ -938,18 +1821,18 @@ async def admin_get_notifications(
 async def admin_create_notification(request: Request, payload: dict):
     """Create a new notification."""
     from app.database import create_notification, log_admin_action
-    
+
     title = payload.get("title")
     message = payload.get("message")
     target_type = payload.get("target_type", "all")
     target_ids = payload.get("target_ids")
     scheduled_at = payload.get("scheduled_at")
-    
+
     if not title or not message:
         raise HTTPException(400, "Title and message are required")
-    
+
     client_ip = request.client.host if request.client else "unknown"
-    
+
     try:
         notification_id = create_notification(
             title=title,
@@ -959,7 +1842,7 @@ async def admin_create_notification(request: Request, payload: dict):
             scheduled_at=scheduled_at,
             created_by=ADMIN_ID
         )
-        
+
         log_admin_action(
             admin_id=ADMIN_ID,
             action_type="create_notification",
@@ -967,7 +1850,7 @@ async def admin_create_notification(request: Request, payload: dict):
             ip_address=client_ip,
             status="success"
         )
-        
+
         return {"ok": True, "notification_id": notification_id}
     except Exception as e:
         log_admin_action(
@@ -986,10 +1869,10 @@ async def admin_get_bot_status(request: Request):
     """Get status of all bots."""
     from app.database import get_bot_statuses
     from app.stream import _pyro_clients
-    
+
     # Get stored bot statuses
     statuses = get_bot_statuses()
-    
+
     # Add current Pyrogram status
     pyrogram_status = {
         "bot_name": "Pyrogram Clients",
@@ -998,7 +1881,7 @@ async def admin_get_bot_status(request: Request):
         "clients_count": len(_pyro_clients),
         "last_check": time.strftime("%Y-%m-%d %H:%M:%S")
     }
-    
+
     return {
         "pyrogram": pyrogram_status,
         "bots": statuses
@@ -1010,10 +1893,10 @@ async def admin_get_bot_status(request: Request):
 async def admin_get_sync_status(request: Request):
     """Get current sync status."""
     from app.database import get_sync_status
-    
+
     sync_status = get_sync_status()
     stats = db.get_stats()
-    
+
     return {
         "sync_status": sync_status,
         "stats": stats
@@ -1025,20 +1908,20 @@ async def admin_get_sync_status(request: Request):
 async def admin_sync_db(request: Request):
     """Manually trigger database sync to HuggingFace."""
     from app.database import push_db_to_hf, log_admin_action
-    
+
     client_ip = request.client.host if request.client else "unknown"
-    
+
     try:
         push_db_to_hf()
         cache_clear_all()
-        
+
         log_admin_action(
             admin_id=ADMIN_ID,
             action_type="sync_db",
             ip_address=client_ip,
             status="success"
         )
-        
+
         return {"ok": True, "message": "Database synced to HuggingFace"}
     except Exception as e:
         log_admin_action(
@@ -1049,7 +1932,6 @@ async def admin_sync_db(request: Request):
             action_details=str(e)
         )
         raise HTTPException(500, f"Failed to sync database: {str(e)}")
-
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1067,11 +1949,11 @@ async def get_ads_config():
 async def get_banners(limit: int = Query(5, ge=1, le=20)):
     """Get active banner ads."""
     from app.database import get_ads_config, get_active_banners
-    
+
     config = get_ads_config()
     if not config.get("enabled") or not config.get("banner_enabled"):
         return {"banners": [], "enabled": False}
-    
+
     banners = get_active_banners(limit=limit)
     return {"banners": banners, "enabled": True}
 
@@ -1080,16 +1962,16 @@ async def get_banners(limit: int = Query(5, ge=1, le=20)):
 async def log_banner_impression(ad_id: int, request: Request):
     """Log banner ad impression."""
     from app.database import log_ad_impression
-    
+
     client_ip = request.client.host if request.client else "unknown"
     page_url = request.headers.get("referer", "")
-    
+
     log_ad_impression(
         ad_id=ad_id,
         ip_address=client_ip,
         page_url=page_url
     )
-    
+
     return {"ok": True}
 
 
@@ -1097,14 +1979,14 @@ async def log_banner_impression(ad_id: int, request: Request):
 async def log_banner_click(ad_id: int, request: Request):
     """Log banner ad click."""
     from app.database import log_ad_click
-    
+
     client_ip = request.client.host if request.client else "unknown"
-    
+
     log_ad_click(
         ad_id=ad_id,
         ip_address=client_ip
     )
-    
+
     return {"ok": True}
 
 
@@ -1113,16 +1995,16 @@ async def log_banner_click(ad_id: int, request: Request):
 async def update_ads_config_endpoint(request: Request):
     """Update ads configuration (Admin only)."""
     from app.database import update_ads_config
-    
+
     body = await request.json()
-    
+
     update_ads_config(
         enabled=body.get("enabled"),
         banner_enabled=body.get("banner_enabled"),
         banner_interval=body.get("banner_interval"),
         banner_duration=body.get("banner_duration")
     )
-    
+
     return {"ok": True, "message": "Ads config updated"}
 
 
@@ -1132,12 +2014,12 @@ async def list_all_banners(request: Request):
     """List all banner ads (Admin only)."""
     import sqlite3
     from app.config import DB_PATH
-    
+
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     try:
         rows = conn.execute("""
-            SELECT * FROM ads_banners 
+            SELECT * FROM ads_banners
             ORDER BY priority DESC, created_at DESC
         """).fetchall()
         return {"banners": [dict(r) for r in rows]}
@@ -1151,13 +2033,13 @@ async def create_banner(request: Request):
     """Create new banner ad (Admin only)."""
     import sqlite3
     from app.config import DB_PATH
-    
+
     body = await request.json()
-    
+
     conn = sqlite3.connect(DB_PATH)
     try:
         cursor = conn.execute("""
-            INSERT INTO ads_banners 
+            INSERT INTO ads_banners
             (title, description, image_url, link_url, position, priority, active, start_date, end_date)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
@@ -1183,27 +2065,37 @@ async def update_banner(banner_id: int, request: Request):
     """Update banner ad (Admin only)."""
     import sqlite3
     from app.config import DB_PATH
-    
+
     body = await request.json()
-    
+
     conn = sqlite3.connect(DB_PATH)
     try:
         updates = []
         params = []
-        
-        for field in ["title", "description", "image_url", "link_url", "position", 
-                      "priority", "active", "start_date", "end_date"]:
+
+        for field in [
+            "title",
+            "description",
+            "image_url",
+            "link_url",
+            "position",
+            "priority",
+            "active",
+            "start_date",
+                "end_date"]:
             if field in body:
                 updates.append(f"{field}=?")
                 params.append(body[field])
-        
+
         if updates:
             updates.append("updated_at=datetime('now')")
+            # Fixed: Column names are from controlled whitelist, values are
+            # parameterized
             query = f"UPDATE ads_banners SET {', '.join(updates)} WHERE id=?"
             params.append(banner_id)
             conn.execute(query, params)
             conn.commit()
-        
+
         return {"ok": True}
     finally:
         conn.close()
@@ -1215,7 +2107,7 @@ async def delete_banner(banner_id: int, request: Request):
     """Delete banner ad (Admin only)."""
     import sqlite3
     from app.config import DB_PATH
-    
+
     conn = sqlite3.connect(DB_PATH)
     try:
         conn.execute("DELETE FROM ads_banners WHERE id=?", (banner_id,))
@@ -1231,14 +2123,17 @@ async def get_ads_stats(request: Request, days: int = Query(7, ge=1, le=90)):
     """Get ads statistics (Admin only)."""
     import sqlite3
     from app.config import DB_PATH
-    
+
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     try:
-        cutoff = f"datetime('now', '-{days} days')"
-        
+        # Fixed: Validate days parameter and use safe SQL construction
+        if not isinstance(days, int) or days < 1 or days > 90:
+            days = 7
+        # cutoff = f"datetime('now', '-{days} days')"  # Unused variable
+
         # Banner performance
-        banners = conn.execute(f"""
+        banners = conn.execute("""
             SELECT
                 b.id, b.title, b.impressions, b.clicks,
                 CASE WHEN b.impressions > 0
@@ -1252,7 +2147,7 @@ async def get_ads_stats(request: Request, days: int = Query(7, ge=1, le=90)):
             GROUP BY b.id
             ORDER BY b.impressions DESC
         """).fetchall()
-        
+
         return {
             "banners": [dict(b) for b in banners],
             "period_days": days
@@ -1276,11 +2171,11 @@ async def get_subscription_config():
 async def get_plans():
     """Get available subscription plans."""
     from app.database import get_subscription_config, get_subscription_plans
-    
+
     config = get_subscription_config()
     if not config.get("enabled"):
         return {"plans": [], "enabled": False}
-    
+
     plans = get_subscription_plans(active_only=True)
     return {"plans": plans, "enabled": True}
 
@@ -1289,7 +2184,7 @@ async def get_plans():
 async def get_user_subscription_endpoint(user_id: int):
     """Get user's active subscription."""
     from app.database import get_user_subscription
-    
+
     subscription = get_user_subscription(user_id)
     return {"subscription": subscription}
 
@@ -1298,7 +2193,7 @@ async def get_user_subscription_endpoint(user_id: int):
 async def check_premium_status(user_id: int):
     """Check if user has premium subscription."""
     from app.database import is_user_premium
-    
+
     is_premium = is_user_premium(user_id)
     return {"user_id": user_id, "is_premium": is_premium}
 
@@ -1308,15 +2203,15 @@ async def check_premium_status(user_id: int):
 async def update_subscription_config_endpoint(request: Request):
     """Update subscription configuration (Admin only)."""
     from app.database import update_subscription_config
-    
+
     body = await request.json()
-    
+
     update_subscription_config(
         enabled=body.get("enabled"),
         trial_enabled=body.get("trial_enabled"),
         trial_days=body.get("trial_days")
     )
-    
+
     return {"ok": True, "message": "Subscription config updated"}
 
 
@@ -1325,7 +2220,7 @@ async def update_subscription_config_endpoint(request: Request):
 async def list_all_plans(request: Request):
     """List all subscription plans (Admin only)."""
     from app.database import get_subscription_plans
-    
+
     plans = get_subscription_plans(active_only=False)
     return {"plans": plans}
 
@@ -1334,18 +2229,19 @@ async def list_all_plans(request: Request):
 @require_admin
 async def create_plan(request: Request):
     """Create new subscription plan (Admin only)."""
-    import sqlite3, json
+    import sqlite3
+    import json
     from app.config import DB_PATH
-    
+
     body = await request.json()
-    
+
     conn = sqlite3.connect(DB_PATH)
     try:
         features = json.dumps(body.get("features", []))
-        
+
         cursor = conn.execute("""
-            INSERT INTO subscription_plans 
-            (name, name_ar, description, description_ar, price, currency, 
+            INSERT INTO subscription_plans
+            (name, name_ar, description, description_ar, price, currency,
              duration_days, features, active, priority)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
@@ -1370,33 +2266,44 @@ async def create_plan(request: Request):
 @require_admin
 async def update_plan(plan_id: int, request: Request):
     """Update subscription plan (Admin only)."""
-    import sqlite3, json
+    import sqlite3
+    import json
     from app.config import DB_PATH
-    
+
     body = await request.json()
-    
+
     conn = sqlite3.connect(DB_PATH)
     try:
         updates = []
         params = []
-        
-        for field in ["name", "name_ar", "description", "description_ar", 
-                      "price", "currency", "duration_days", "active", "priority"]:
+
+        for field in [
+            "name",
+            "name_ar",
+            "description",
+            "description_ar",
+            "price",
+            "currency",
+            "duration_days",
+            "active",
+                "priority"]:
             if field in body:
                 updates.append(f"{field}=?")
                 params.append(body[field])
-        
+
         if "features" in body:
             updates.append("features=?")
             params.append(json.dumps(body["features"]))
-        
+
         if updates:
             updates.append("updated_at=datetime('now')")
+            # Fixed: Column names are from controlled whitelist, values are
+            # parameterized
             query = f"UPDATE subscription_plans SET {', '.join(updates)} WHERE id=?"
             params.append(plan_id)
             conn.execute(query, params)
             conn.commit()
-        
+
         return {"ok": True}
     finally:
         conn.close()
@@ -1404,13 +2311,13 @@ async def update_plan(plan_id: int, request: Request):
 
 @app.get("/api/admin/subscriptions/users")
 @require_admin
-async def list_user_subscriptions(request: Request, 
-                                   status: str = Query(None),
-                                   limit: int = Query(50, ge=1, le=200)):
+async def list_user_subscriptions(request: Request,
+                                  status: str = Query(None),
+                                  limit: int = Query(50, ge=1, le=200)):
     """List user subscriptions (Admin only)."""
     import sqlite3
     from app.config import DB_PATH
-    
+
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     try:
@@ -1420,14 +2327,14 @@ async def list_user_subscriptions(request: Request,
             JOIN subscription_plans sp ON us.plan_id = sp.id
         """
         params = []
-        
+
         if status:
             query += " WHERE us.status=?"
             params.append(status)
-        
+
         query += " ORDER BY us.created_at DESC LIMIT ?"
         params.append(limit)
-        
+
         rows = conn.execute(query, params).fetchall()
         return {"subscriptions": [dict(r) for r in rows]}
     finally:
@@ -1440,33 +2347,33 @@ async def get_subscription_stats(request: Request):
     """Get subscription statistics (Admin only)."""
     import sqlite3
     from app.config import DB_PATH
-    
+
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     try:
         # Count by status
         stats = conn.execute("""
-            SELECT 
+            SELECT
                 status,
                 COUNT(*) as count,
                 SUM(CASE WHEN plan_id > 1 THEN 1 ELSE 0 END) as premium_count
             FROM user_subscriptions
             GROUP BY status
         """).fetchall()
-        
+
         # Revenue (last 30 days)
         revenue = conn.execute("""
-            SELECT 
+            SELECT
                 SUM(amount) as total_revenue,
                 COUNT(*) as transaction_count
             FROM subscription_transactions
-            WHERE status='completed' 
+            WHERE status='completed'
             AND created_at >= datetime('now', '-30 days')
         """).fetchone()
-        
+
         # Plan distribution
         plans = conn.execute("""
-            SELECT 
+            SELECT
                 sp.name, sp.name_ar, sp.price,
                 COUNT(us.id) as subscriber_count
             FROM subscription_plans sp
@@ -1474,12 +2381,15 @@ async def get_subscription_stats(request: Request):
             GROUP BY sp.id
             ORDER BY subscriber_count DESC
         """).fetchall()
-        
+
         return {
-            "status_breakdown": [dict(r) for r in stats],
-            "revenue_30d": dict(revenue) if revenue else {"total_revenue": 0, "transaction_count": 0},
-            "plan_distribution": [dict(r) for r in plans]
-        }
+            "status_breakdown": [
+                dict(r) for r in stats],
+            "revenue_30d": dict(revenue) if revenue else {
+                "total_revenue": 0,
+                "transaction_count": 0},
+            "plan_distribution": [
+                dict(r) for r in plans]}
     finally:
         conn.close()
 
@@ -1498,7 +2408,7 @@ async def search_users_endpoint(
 ):
     """Search for users to add as friends."""
     from app.friends import FriendsManager
-    
+
     results = FriendsManager.search_users(query, user_id, limit)
     return {"users": results}
 
@@ -1508,20 +2418,23 @@ async def search_users_endpoint(
 async def send_friend_request_endpoint(request: Request):
     """Send a friend request."""
     from app.friends import FriendsManager
-    
+
     data = await request.json()
     from_user_id = data.get("from_user_id")
     to_user_id = data.get("to_user_id")
     message = data.get("message")
-    
+
     if not from_user_id or not to_user_id:
         raise HTTPException(400, "Missing required fields")
-    
-    result = FriendsManager.send_friend_request(from_user_id, to_user_id, message)
-    
+
+    result = FriendsManager.send_friend_request(
+        from_user_id, to_user_id, message)
+
     if not result["success"]:
-        raise HTTPException(400, result.get("error", "Failed to send friend request"))
-    
+        raise HTTPException(
+            400, result.get(
+                "error", "Failed to send friend request"))
+
     return result
 
 
@@ -1534,7 +2447,7 @@ async def get_friend_requests_endpoint(
 ):
     """Get friend requests (received or sent)."""
     from app.friends import FriendsManager
-    
+
     requests_list = FriendsManager.get_friend_requests(user_id, request_type)
     return {"requests": requests_list}
 
@@ -1544,18 +2457,20 @@ async def get_friend_requests_endpoint(
 async def accept_friend_request_endpoint(request: Request, request_id: int):
     """Accept a friend request."""
     from app.friends import FriendsManager
-    
+
     data = await request.json()
     user_id = data.get("user_id")
-    
+
     if not user_id:
         raise HTTPException(400, "Missing user_id")
-    
+
     result = FriendsManager.accept_friend_request(request_id, user_id)
-    
+
     if not result["success"]:
-        raise HTTPException(400, result.get("error", "Failed to accept friend request"))
-    
+        raise HTTPException(
+            400, result.get(
+                "error", "Failed to accept friend request"))
+
     cache_clear_prefix(f"friends_{user_id}")
     return result
 
@@ -1565,18 +2480,20 @@ async def accept_friend_request_endpoint(request: Request, request_id: int):
 async def reject_friend_request_endpoint(request: Request, request_id: int):
     """Reject a friend request."""
     from app.friends import FriendsManager
-    
+
     data = await request.json()
     user_id = data.get("user_id")
-    
+
     if not user_id:
         raise HTTPException(400, "Missing user_id")
-    
+
     result = FriendsManager.reject_friend_request(request_id, user_id)
-    
+
     if not result["success"]:
-        raise HTTPException(400, result.get("error", "Failed to reject friend request"))
-    
+        raise HTTPException(
+            400, result.get(
+                "error", "Failed to reject friend request"))
+
     return result
 
 
@@ -1585,18 +2502,20 @@ async def reject_friend_request_endpoint(request: Request, request_id: int):
 async def cancel_friend_request_endpoint(request: Request, request_id: int):
     """Cancel a sent friend request."""
     from app.friends import FriendsManager
-    
+
     data = await request.json()
     user_id = data.get("user_id")
-    
+
     if not user_id:
         raise HTTPException(400, "Missing user_id")
-    
+
     result = FriendsManager.cancel_friend_request(request_id, user_id)
-    
+
     if not result["success"]:
-        raise HTTPException(400, result.get("error", "Failed to cancel friend request"))
-    
+        raise HTTPException(
+            400, result.get(
+                "error", "Failed to cancel friend request"))
+
     return result
 
 
@@ -1610,15 +2529,15 @@ async def get_friends_list_endpoint(
 ):
     """Get user's friends list."""
     from app.friends import FriendsManager
-    
+
     cache_key = f"friends_{user_id}_{limit}_{offset}"
     cached = cache_get(cache_key)
     if cached is not None:
         return cached
-    
+
     friends = FriendsManager.get_friends_list(user_id, limit, offset)
     result = {"friends": friends}
-    
+
     cache_set(cache_key, result, 60)
     return result
 
@@ -1628,18 +2547,20 @@ async def get_friends_list_endpoint(
 async def remove_friend_endpoint(request: Request, friend_id: int):
     """Remove a friend."""
     from app.friends import FriendsManager
-    
+
     data = await request.json()
     user_id = data.get("user_id")
-    
+
     if not user_id:
         raise HTTPException(400, "Missing user_id")
-    
+
     result = FriendsManager.remove_friend(user_id, friend_id)
-    
+
     if not result["success"]:
-        raise HTTPException(400, result.get("error", "Failed to remove friend"))
-    
+        raise HTTPException(
+            400, result.get(
+                "error", "Failed to remove friend"))
+
     cache_clear_prefix(f"friends_{user_id}")
     return result
 
@@ -1649,19 +2570,19 @@ async def remove_friend_endpoint(request: Request, friend_id: int):
 async def block_user_endpoint(request: Request, blocked_user_id: int):
     """Block a user."""
     from app.friends import FriendsManager
-    
+
     data = await request.json()
     user_id = data.get("user_id")
     reason = data.get("reason")
-    
+
     if not user_id:
         raise HTTPException(400, "Missing user_id")
-    
+
     result = FriendsManager.block_user(user_id, blocked_user_id, reason)
-    
+
     if not result["success"]:
         raise HTTPException(400, result.get("error", "Failed to block user"))
-    
+
     cache_clear_prefix(f"friends_{user_id}")
     return result
 
@@ -1671,27 +2592,29 @@ async def block_user_endpoint(request: Request, blocked_user_id: int):
 async def unblock_user_endpoint(request: Request, blocked_user_id: int):
     """Unblock a user."""
     from app.friends import FriendsManager
-    
+
     data = await request.json()
     user_id = data.get("user_id")
-    
+
     if not user_id:
         raise HTTPException(400, "Missing user_id")
-    
+
     result = FriendsManager.unblock_user(user_id, blocked_user_id)
-    
+
     if not result["success"]:
         raise HTTPException(400, result.get("error", "Failed to unblock user"))
-    
+
     return result
 
 
 @app.get("/api/friends/blocked")
 @rate_limit(max_requests=20, window_seconds=60)
-async def get_blocked_users_endpoint(request: Request, user_id: int = Query(...)):
+async def get_blocked_users_endpoint(
+        request: Request,
+        user_id: int = Query(...)):
     """Get list of blocked users."""
     from app.friends import FriendsManager
-    
+
     blocked = FriendsManager.get_blocked_users(user_id)
     return {"blocked_users": blocked}
 
@@ -1705,7 +2628,7 @@ async def get_friendship_status_endpoint(
 ):
     """Get friendship status with another user."""
     from app.friends import FriendsManager
-    
+
     status = FriendsManager.get_friendship_status(user_id, other_user_id)
     return {"status": status}
 
@@ -1719,21 +2642,24 @@ async def get_friendship_status_endpoint(
 async def create_conversation_endpoint(request: Request):
     """Create a new conversation."""
     from app.messaging import MessagingManager
-    
+
     data = await request.json()
     user_ids = data.get("user_ids", [])
     conversation_type = data.get("type", "direct")
     name = data.get("name")
     created_by = data.get("created_by")
-    
+
     if not user_ids or len(user_ids) < 2:
         raise HTTPException(400, "At least 2 users required")
-    
-    result = MessagingManager.create_conversation(user_ids, conversation_type, name, created_by)
-    
+
+    result = MessagingManager.create_conversation(
+        user_ids, conversation_type, name, created_by)
+
     if not result["success"]:
-        raise HTTPException(400, result.get("error", "Failed to create conversation"))
-    
+        raise HTTPException(
+            400, result.get(
+                "error", "Failed to create conversation"))
+
     return result
 
 
@@ -1746,15 +2672,16 @@ async def get_conversations_endpoint(
 ):
     """Get user's conversations."""
     from app.messaging import MessagingManager
-    
+
     cache_key = f"conversations_{user_id}_{include_archived}"
     cached = cache_get(cache_key)
     if cached is not None:
         return cached
-    
-    conversations = MessagingManager.get_conversations(user_id, include_archived)
+
+    conversations = MessagingManager.get_conversations(
+        user_id, include_archived)
     result = {"conversations": conversations}
-    
+
     cache_set(cache_key, result, 30)
     return result
 
@@ -1764,7 +2691,7 @@ async def get_conversations_endpoint(
 async def send_message_endpoint(request: Request):
     """Send a message."""
     from app.messaging import MessagingManager
-    
+
     data = await request.json()
     conversation_id = data.get("conversation_id")
     sender_id = data.get("sender_id")
@@ -1773,21 +2700,21 @@ async def send_message_endpoint(request: Request):
     media_file_id = data.get("media_file_id")
     media_metadata = data.get("media_metadata")
     reply_to_message_id = data.get("reply_to_message_id")
-    
+
     if not conversation_id or not sender_id:
         raise HTTPException(400, "Missing required fields")
-    
+
     if media_type == "text" and not content:
         raise HTTPException(400, "Text messages require content")
-    
+
     result = MessagingManager.send_message(
         conversation_id, sender_id, content, media_type,
         media_file_id, media_metadata, reply_to_message_id
     )
-    
+
     if not result["success"]:
         raise HTTPException(400, result.get("error", "Failed to send message"))
-    
+
     cache_clear_prefix(f"conversations_{sender_id}")
     cache_clear_prefix(f"messages_{conversation_id}")
     return result
@@ -1804,8 +2731,9 @@ async def get_messages_endpoint(
 ):
     """Get messages from a conversation."""
     from app.messaging import MessagingManager
-    
-    messages = MessagingManager.get_messages(conversation_id, user_id, limit, before_message_id)
+
+    messages = MessagingManager.get_messages(
+        conversation_id, user_id, limit, before_message_id)
     return {"messages": messages}
 
 
@@ -1814,19 +2742,19 @@ async def get_messages_endpoint(
 async def edit_message_endpoint(request: Request, message_id: int):
     """Edit a message."""
     from app.messaging import MessagingManager
-    
+
     data = await request.json()
     user_id = data.get("user_id")
     new_content = data.get("content")
-    
+
     if not user_id or not new_content:
         raise HTTPException(400, "Missing required fields")
-    
+
     result = MessagingManager.edit_message(message_id, user_id, new_content)
-    
+
     if not result["success"]:
         raise HTTPException(400, result.get("error", "Failed to edit message"))
-    
+
     return result
 
 
@@ -1835,18 +2763,20 @@ async def edit_message_endpoint(request: Request, message_id: int):
 async def delete_message_endpoint(request: Request, message_id: int):
     """Delete a message."""
     from app.messaging import MessagingManager
-    
+
     data = await request.json()
     user_id = data.get("user_id")
-    
+
     if not user_id:
         raise HTTPException(400, "Missing user_id")
-    
+
     result = MessagingManager.delete_message(message_id, user_id)
-    
+
     if not result["success"]:
-        raise HTTPException(400, result.get("error", "Failed to delete message"))
-    
+        raise HTTPException(
+            400, result.get(
+                "error", "Failed to delete message"))
+
     return result
 
 
@@ -1855,20 +2785,21 @@ async def delete_message_endpoint(request: Request, message_id: int):
 async def mark_as_read_endpoint(request: Request):
     """Mark messages as read."""
     from app.messaging import MessagingManager
-    
+
     data = await request.json()
     conversation_id = data.get("conversation_id")
     user_id = data.get("user_id")
     message_id = data.get("message_id")
-    
+
     if not conversation_id or not user_id:
         raise HTTPException(400, "Missing required fields")
-    
-    result = MessagingManager.mark_as_read(conversation_id, user_id, message_id)
-    
+
+    result = MessagingManager.mark_as_read(
+        conversation_id, user_id, message_id)
+
     if not result["success"]:
         raise HTTPException(400, result.get("error", "Failed to mark as read"))
-    
+
     cache_clear_prefix(f"conversations_{user_id}")
     return result
 
@@ -1878,20 +2809,20 @@ async def mark_as_read_endpoint(request: Request):
 async def add_reaction_endpoint(request: Request):
     """Add a reaction to a message."""
     from app.messaging import MessagingManager
-    
+
     data = await request.json()
     message_id = data.get("message_id")
     user_id = data.get("user_id")
     reaction = data.get("reaction")
-    
+
     if not message_id or not user_id or not reaction:
         raise HTTPException(400, "Missing required fields")
-    
+
     result = MessagingManager.add_reaction(message_id, user_id, reaction)
-    
+
     if not result["success"]:
         raise HTTPException(400, result.get("error", "Failed to add reaction"))
-    
+
     return result
 
 
@@ -1900,29 +2831,33 @@ async def add_reaction_endpoint(request: Request):
 async def remove_reaction_endpoint(request: Request):
     """Remove a reaction from a message."""
     from app.messaging import MessagingManager
-    
+
     data = await request.json()
     message_id = data.get("message_id")
     user_id = data.get("user_id")
     reaction = data.get("reaction")
-    
+
     if not message_id or not user_id or not reaction:
         raise HTTPException(400, "Missing required fields")
-    
+
     result = MessagingManager.remove_reaction(message_id, user_id, reaction)
-    
+
     if not result["success"]:
-        raise HTTPException(400, result.get("error", "Failed to remove reaction"))
-    
+        raise HTTPException(
+            400, result.get(
+                "error", "Failed to remove reaction"))
+
     return result
 
 
 @app.get("/api/messages/unread")
 @rate_limit(max_requests=30, window_seconds=60)
-async def get_unread_count_endpoint(request: Request, user_id: int = Query(...)):
+async def get_unread_count_endpoint(
+        request: Request,
+        user_id: int = Query(...)):
     """Get total unread message count."""
     from app.messaging import MessagingManager
-    
+
     count = MessagingManager.get_unread_count(user_id)
     return {"unread_count": count}
 
@@ -1932,20 +2867,23 @@ async def get_unread_count_endpoint(request: Request, user_id: int = Query(...))
 async def set_typing_indicator_endpoint(request: Request):
     """Set typing indicator."""
     from app.messaging import MessagingManager
-    
+
     data = await request.json()
     conversation_id = data.get("conversation_id")
     user_id = data.get("user_id")
     is_typing = data.get("is_typing", True)
-    
+
     if not conversation_id or not user_id:
         raise HTTPException(400, "Missing required fields")
-    
-    result = MessagingManager.set_typing_indicator(conversation_id, user_id, is_typing)
-    
+
+    result = MessagingManager.set_typing_indicator(
+        conversation_id, user_id, is_typing)
+
     if not result["success"]:
-        raise HTTPException(400, result.get("error", "Failed to set typing indicator"))
-    
+        raise HTTPException(
+            400, result.get(
+                "error", "Failed to set typing indicator"))
+
     return result
 
 
@@ -1958,7 +2896,7 @@ async def get_typing_users_endpoint(
 ):
     """Get users currently typing in a conversation."""
     from app.messaging import MessagingManager
-    
+
     typing_users = MessagingManager.get_typing_users(conversation_id, user_id)
     return {"typing_users": typing_users}
 
@@ -1968,20 +2906,23 @@ async def get_typing_users_endpoint(
 async def update_online_status_endpoint(request: Request):
     """Update user's online status."""
     from app.messaging import MessagingManager
-    
+
     data = await request.json()
     user_id = data.get("user_id")
     is_online = data.get("is_online", True)
     status_text = data.get("status_text")
-    
+
     if not user_id:
         raise HTTPException(400, "Missing user_id")
-    
-    result = MessagingManager.update_online_status(user_id, is_online, status_text)
-    
+
+    result = MessagingManager.update_online_status(
+        user_id, is_online, status_text)
+
     if not result["success"]:
-        raise HTTPException(400, result.get("error", "Failed to update online status"))
-    
+        raise HTTPException(
+            400, result.get(
+                "error", "Failed to update online status"))
+
     return result
 
 
@@ -1990,21 +2931,24 @@ async def update_online_status_endpoint(request: Request):
 async def toggle_conversation_setting_endpoint(request: Request):
     """Toggle conversation settings (pin, mute, archive)."""
     from app.messaging import MessagingManager
-    
+
     data = await request.json()
     conversation_id = data.get("conversation_id")
     user_id = data.get("user_id")
     setting = data.get("setting")
     value = data.get("value", True)
-    
+
     if not conversation_id or not user_id or not setting:
         raise HTTPException(400, "Missing required fields")
-    
-    result = MessagingManager.toggle_conversation_setting(conversation_id, user_id, setting, value)
-    
+
+    result = MessagingManager.toggle_conversation_setting(
+        conversation_id, user_id, setting, value)
+
     if not result["success"]:
-        raise HTTPException(400, result.get("error", "Failed to update setting"))
-    
+        raise HTTPException(
+            400, result.get(
+                "error", "Failed to update setting"))
+
     cache_clear_prefix(f"conversations_{user_id}")
     return result
 
@@ -2020,17 +2964,15 @@ async def search_messages_endpoint(
 ):
     """Search messages in a conversation."""
     from app.messaging import MessagingManager
-    
-    messages = MessagingManager.search_messages(conversation_id, user_id, query, limit)
+
+    messages = MessagingManager.search_messages(
+        conversation_id, user_id, query, limit)
     return {"messages": messages}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Watch Rooms API Endpoints
 # ══════════════════════════════════════════════════════════════════════════════
-
-from pydantic import BaseModel
-from typing import Optional as Opt
 
 
 class CreateRoomRequest(BaseModel):
@@ -2082,7 +3024,7 @@ class SendMessageRequest(BaseModel):
 async def create_room_endpoint(request: Request, data: CreateRoomRequest):
     """Create a new watch room."""
     from app import watch_rooms
-    
+
     try:
         room = watch_rooms.create_room(
             host_user_id=data.host_user_id,
@@ -2112,19 +3054,19 @@ async def get_active_rooms_endpoint(
 ):
     """Get list of active watch rooms."""
     from app import watch_rooms
-    
+
     cached_key = f"active_rooms_{content_type}_{is_public}_{limit}_{offset}"
     cached = cache_get(cached_key)
     if cached:
         return cached
-    
+
     rooms = watch_rooms.get_active_rooms(
         limit=limit,
         offset=offset,
         content_type=content_type,
         is_public=is_public
     )
-    
+
     result = {"rooms": rooms, "count": len(rooms)}
     cache_set(cached_key, result, 10)  # Cache for 10 seconds
     return result
@@ -2134,7 +3076,7 @@ async def get_active_rooms_endpoint(
 async def get_room_details_endpoint(room_id: str):
     """Get detailed information about a room."""
     from app import watch_rooms
-    
+
     try:
         room = watch_rooms.get_room_details(room_id)
         return {"success": True, "room": room}
@@ -2147,10 +3089,13 @@ async def get_room_details_endpoint(room_id: str):
 
 @app.post("/api/rooms/{room_id}/join")
 @rate_limit(max_requests=20, window_seconds=60)
-async def join_room_endpoint(request: Request, room_id: str, data: JoinRoomRequest):
+async def join_room_endpoint(
+        request: Request,
+        room_id: str,
+        data: JoinRoomRequest):
     """Join a watch room."""
     from app import watch_rooms
-    
+
     try:
         room = watch_rooms.join_room(
             room_id=room_id,
@@ -2167,10 +3112,13 @@ async def join_room_endpoint(request: Request, room_id: str, data: JoinRoomReque
 
 @app.post("/api/rooms/{room_id}/leave")
 @rate_limit(max_requests=20, window_seconds=60)
-async def leave_room_endpoint(request: Request, room_id: str, user_id: int = Query(...)):
+async def leave_room_endpoint(
+        request: Request,
+        room_id: str,
+        user_id: int = Query(...)):
     """Leave a watch room."""
     from app import watch_rooms
-    
+
     try:
         success = watch_rooms.leave_room(room_id, user_id)
         return {"success": success}
@@ -2190,7 +3138,7 @@ async def kick_participant_endpoint(
     """Kick a participant from the room."""
     from app import watch_rooms
     from app.websocket_manager import notify_participant_kicked
-    
+
     try:
         success = watch_rooms.kick_participant(room_id, user_id, target_id)
         if success:
@@ -2213,7 +3161,7 @@ async def update_room_settings_endpoint(
     """Update room settings."""
     from app import watch_rooms
     from app.websocket_manager import notify_room_update
-    
+
     try:
         room = watch_rooms.update_room_settings(
             room_id=room_id,
@@ -2237,11 +3185,14 @@ async def update_room_settings_endpoint(
 
 @app.delete("/api/rooms/{room_id}")
 @rate_limit(max_requests=10, window_seconds=60)
-async def delete_room_endpoint(request: Request, room_id: str, user_id: int = Query(...)):
+async def delete_room_endpoint(
+        request: Request,
+        room_id: str,
+        user_id: int = Query(...)):
     """Delete a watch room."""
     from app import watch_rooms
     from app.websocket_manager import notify_room_ended
-    
+
     try:
         success = watch_rooms.delete_room(room_id, user_id)
         if success:
@@ -2255,10 +3206,11 @@ async def delete_room_endpoint(request: Request, room_id: str, user_id: int = Qu
 
 
 @app.get("/api/rooms/search")
-async def search_rooms_endpoint(query: str = Query(..., min_length=2), limit: int = Query(20, ge=1, le=50)):
+async def search_rooms_endpoint(
+        query: str = Query(..., min_length=2), limit: int = Query(20, ge=1, le=50)):
     """Search for watch rooms."""
     from app import watch_rooms
-    
+
     rooms = watch_rooms.search_rooms(query, limit)
     return {"rooms": rooms, "count": len(rooms)}
 
@@ -2267,10 +3219,13 @@ async def search_rooms_endpoint(query: str = Query(..., min_length=2), limit: in
 
 @app.post("/api/rooms/{room_id}/sync")
 @rate_limit(max_requests=100, window_seconds=60)
-async def sync_playback_endpoint(request: Request, room_id: str, data: SyncPlaybackRequest):
+async def sync_playback_endpoint(
+        request: Request,
+        room_id: str,
+        data: SyncPlaybackRequest):
     """Synchronize playback action."""
     from app import room_sync
-    
+
     try:
         sync_state = room_sync.sync_playback(
             room_id=room_id,
@@ -2291,7 +3246,7 @@ async def sync_playback_endpoint(request: Request, room_id: str, data: SyncPlayb
 async def get_sync_state_endpoint(room_id: str):
     """Get current synchronization state."""
     from app import room_sync
-    
+
     try:
         sync_state = room_sync.get_sync_state(room_id)
         return {"success": True, "sync_state": sync_state}
@@ -2304,10 +3259,13 @@ async def get_sync_state_endpoint(room_id: str):
 
 @app.post("/api/rooms/{room_id}/resync")
 @rate_limit(max_requests=20, window_seconds=60)
-async def resync_participant_endpoint(request: Request, room_id: str, user_id: int = Query(...)):
+async def resync_participant_endpoint(
+        request: Request,
+        room_id: str,
+        user_id: int = Query(...)):
     """Resynchronize a participant."""
     from app import room_sync
-    
+
     try:
         sync_state = room_sync.resync_participant(room_id, user_id)
         return {"success": True, "sync_state": sync_state}
@@ -2322,10 +3280,13 @@ async def resync_participant_endpoint(request: Request, room_id: str, user_id: i
 
 @app.post("/api/rooms/{room_id}/chat")
 @rate_limit(max_requests=60, window_seconds=60)
-async def send_room_message_endpoint(request: Request, room_id: str, data: SendMessageRequest):
+async def send_room_message_endpoint(
+        request: Request,
+        room_id: str,
+        data: SendMessageRequest):
     """Send a message in room chat."""
     from app import watch_rooms
-    
+
     try:
         message = watch_rooms.send_room_message(
             room_id=room_id,
@@ -2351,7 +3312,7 @@ async def get_room_messages_endpoint(
 ):
     """Get chat messages from a room."""
     from app import watch_rooms
-    
+
     messages = watch_rooms.get_room_messages(room_id, limit, offset, before_id)
     return {"messages": messages, "count": len(messages)}
 
@@ -2366,7 +3327,7 @@ async def delete_room_message_endpoint(
 ):
     """Delete a chat message."""
     from app import watch_rooms
-    
+
     try:
         success = watch_rooms.delete_room_message(message_id, user_id)
         return {"success": success}
@@ -2381,7 +3342,7 @@ async def delete_room_message_endpoint(
 async def get_room_participants_endpoint(room_id: str):
     """Get all participants in a room."""
     from app import watch_rooms
-    
+
     participants = watch_rooms.get_room_participants(room_id)
     return {"participants": participants, "count": len(participants)}
 
@@ -2389,16 +3350,21 @@ async def get_room_participants_endpoint(room_id: str):
 # ── WebSocket Endpoint ───────────────────────────────────────────────────────
 
 @app.websocket("/ws/rooms/{room_id}")
-async def websocket_room_endpoint(websocket: WebSocket, room_id: str, user_id: int = Query(...)):
+async def websocket_room_endpoint(
+        websocket: WebSocket,
+        room_id: str,
+        user_id: int = Query(...)):
     """WebSocket endpoint for real-time room communication."""
     from app.websocket_manager import manager, handle_websocket_message
     from app import watch_rooms
-    
+
     # Verify user is in room
     try:
         room = watch_rooms.get_room_details(room_id)
-        user_in_room = any(p['user_id'] == user_id for p in room.get('participants', []))
-        
+        user_in_room = any(
+            p['user_id'] == user_id for p in room.get(
+                'participants', []))
+
         if not user_in_room:
             await websocket.close(code=1008, reason="Not in room")
             return
@@ -2406,20 +3372,21 @@ async def websocket_room_endpoint(websocket: WebSocket, room_id: str, user_id: i
         logger.error(f"Error verifying room access: {e}")
         await websocket.close(code=1011, reason="Server error")
         return
-    
+
     # Connect to room
     await manager.connect(websocket, room_id, user_id)
-    
+
     try:
         while True:
             # Receive message
             data = await websocket.receive_json()
-            
+
             # Handle message
             await handle_websocket_message(websocket, room_id, user_id, data)
-    
+
     except WebSocketDisconnect:
-        logger.info(f"WebSocket disconnected: user {user_id} from room {room_id}")
+        logger.info(
+            f"WebSocket disconnected: user {user_id} from room {room_id}")
     except Exception as e:
         logger.error(f"WebSocket error: {e}", exc_info=True)
     finally:
@@ -2427,10 +3394,15 @@ async def websocket_room_endpoint(websocket: WebSocket, room_id: str, user_id: i
 
 
 # ── Static frontend ─────────────────────────────────────────────────────────
-import os as _os
 _static_dir = _os.path.join(_os.path.dirname(__file__), "..", "static")
 if _os.path.isdir(_static_dir):
-    app.mount("/assets", StaticFiles(directory=_os.path.join(_static_dir, "assets")), name="assets")
+    app.mount(
+        "/assets",
+        StaticFiles(
+            directory=_os.path.join(
+                _static_dir,
+                "assets")),
+        name="assets")
 
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):

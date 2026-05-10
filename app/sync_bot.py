@@ -11,7 +11,6 @@ File caption format:
 """
 import re
 import logging
-import asyncio
 import sqlite3
 from telegram import Update
 from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes
@@ -23,11 +22,17 @@ from app.cache import cache_clear_all
 
 logger = logging.getLogger(__name__)
 
-MOVIE_TOPIC_RE = re.compile(r'#([\w&]+)\s+#movies\s+#(mid\d+)\s+#(\d+)', re.IGNORECASE)
-SERIES_TOPIC_RE = re.compile(r'#([\w&]+)\s+#series\s+(?:#s\d+\s+)?#(sid\d+)\s+#(\d+)', re.IGNORECASE)
-EPISODE_CAP_RE = re.compile(r'#[\w&]+\s+#[Ss](\d+)\s+#[Ee](\d+)', re.IGNORECASE)
-MOVIE_CAP_RE   = re.compile(r'#[\w&]+\s+#Movie\b', re.IGNORECASE)
-GENERAL_RE     = re.compile(r'general', re.IGNORECASE)
+MOVIE_TOPIC_RE = re.compile(
+    r'#([\w&]+)\s+#movies\s+#(mid\d+)\s+#(\d+)',
+    re.IGNORECASE)
+SERIES_TOPIC_RE = re.compile(
+    r'#([\w&]+)\s+#series\s+(?:#s\d+\s+)?#(sid\d+)\s+#(\d+)',
+    re.IGNORECASE)
+EPISODE_CAP_RE = re.compile(
+    r'#[\w&]+\s+#[Ss](\d+)\s+#[Ee](\d+)',
+    re.IGNORECASE)
+MOVIE_CAP_RE = re.compile(r'#[\w&]+\s+#Movie\b', re.IGNORECASE)
+GENERAL_RE = re.compile(r'general', re.IGNORECASE)
 
 
 def parse_topic_name(name: str) -> dict | None:
@@ -35,10 +40,20 @@ def parse_topic_name(name: str) -> dict | None:
         return None
     m = MOVIE_TOPIC_RE.search(name)
     if m:
-        return {"type": "movie", "slug": m.group(1), "internal_id": m.group(2), "tmdb_id": int(m.group(3))}
+        return {
+            "type": "movie",
+            "slug": m.group(1),
+            "internal_id": m.group(2),
+            "tmdb_id": int(
+                m.group(3))}
     m = SERIES_TOPIC_RE.search(name)
     if m:
-        return {"type": "series", "slug": m.group(1), "internal_id": m.group(2), "tmdb_id": int(m.group(3))}
+        return {
+            "type": "series",
+            "slug": m.group(1),
+            "internal_id": m.group(2),
+            "tmdb_id": int(
+                m.group(3))}
     return None
 
 
@@ -83,7 +98,8 @@ def _find_movie_by_topic(topic_id: int) -> dict | None:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     try:
-        row = conn.execute("SELECT * FROM movies WHERE topic_id=?", (topic_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM movies WHERE topic_id=?", (topic_id,)).fetchone()
         return dict(row) if row else None
     finally:
         conn.close()
@@ -116,12 +132,15 @@ def _find_series_by_topic(topic_id: int) -> dict | None:
         conn.close()
 
 
-async def handle_file_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_file_message(
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     if not msg:
         return
 
-    chat_id = msg.chat_id if msg.chat_id else (msg.chat.id if msg.chat else None)
+    chat_id = msg.chat_id if msg.chat_id else (
+        msg.chat.id if msg.chat else None)
     if chat_id != PRIVATE_GROUP_ID:
         return
 
@@ -133,26 +152,32 @@ async def handle_file_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not file_obj:
         return
 
-    file_id   = file_obj.file_id
+    file_id = file_obj.file_id
     file_size = getattr(file_obj, "file_size", None) or 0
-    duration  = getattr(file_obj, "duration",  None) or 0
+    duration = getattr(file_obj, "duration", None) or 0
     message_id = msg.message_id
-    topic_id   = getattr(msg, "message_thread_id", None) or 0
+    topic_id = getattr(msg, "message_thread_id", None) or 0
 
     if MOVIE_CAP_RE.search(caption):
         movie = _find_movie_by_topic(topic_id)
         if movie:
-            db.update_movie_file(movie["id"], file_id, file_size, duration, message_id)
+            db.update_movie_file(
+                movie["id"],
+                file_id,
+                file_size,
+                duration,
+                message_id)
             push_db_to_hf()
             cache_clear_all()
-            logger.info(f"✅ Movie file saved: {movie['title']} — file_id={file_id[:20]}...")
+            logger.info(
+                f"✅ Movie file saved: {movie['title']} — file_id={file_id[:20]}...")
         else:
             logger.warning(f"No movie found for topic_id={topic_id}")
         return
 
     ep_match = EPISODE_CAP_RE.search(caption)
     if ep_match:
-        season_num  = int(ep_match.group(1))
+        season_num = int(ep_match.group(1))
         episode_num = int(ep_match.group(2))
 
         series = _find_series_by_topic(topic_id)
@@ -180,8 +205,15 @@ async def handle_file_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                 "message_id": message_id,
             })
         else:
-            db.update_episode_file(series["id"], season_num, episode_num,
-                                   file_id, file_size, duration, message_id, topic_id)
+            db.update_episode_file(
+                series["id"],
+                season_num,
+                episode_num,
+                file_id,
+                file_size,
+                duration,
+                message_id,
+                topic_id)
         push_db_to_hf()
         cache_clear_all()
         logger.info(
@@ -189,7 +221,8 @@ async def handle_file_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return
 
-    logger.debug(f"Message in topic {topic_id} has no recognised caption pattern: {caption[:80]}")
+    logger.debug(
+        f"Message in topic {topic_id} has no recognised caption pattern: {caption[:80]}")
 
 
 async def cmd_fullscan(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -207,12 +240,12 @@ async def cmd_fullscan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         results = await run_full_scan(_pyro_clients[0])
         s = db.get_stats()
         await msg.reply_text(
-            f"✅ اكتمل المسح!\n"
+            "✅ اكتمل المسح!\n"
             f"📋 مواضيع مفحوصة: {results['topics_scanned']}\n"
             f"➕ محتوى جديد مسجّل: {results['registered']}\n"
             f"🎬 ملفات مرفقة: {results['files_attached']}\n"
             f"⚠️ أخطاء: {results['errors']}\n\n"
-            f"📊 المكتبة الآن:\n"
+            "📊 المكتبة الآن:\n"
             f"• {s['movies_count']} فيلم | {s['series_count']} مسلسل | {s['episodes_count']} حلقة"
         )
     except Exception as e:
@@ -224,9 +257,10 @@ def build_sync_app() -> Application:
     app = Application.builder().token(MAIN_BOT_TOKEN).build()
     app.add_handler(
         MessageHandler(
-            filters.Chat(chat_id=PRIVATE_GROUP_ID) & (filters.VIDEO | filters.Document.VIDEO),
+            filters.Chat(
+                chat_id=PRIVATE_GROUP_ID) & (
+                filters.VIDEO | filters.Document.VIDEO),
             handle_file_message,
-        )
-    )
+        ))
     app.add_handler(CommandHandler("fullscan", cmd_fullscan))
     return app

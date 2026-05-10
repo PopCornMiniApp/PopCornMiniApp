@@ -1,0 +1,49 @@
+{
+  "timestamp": "2026-05-09T22:15:25.977266",
+  "space": {
+    "url": "https://ToolKit-backend-popcorn.hf.space",
+    "health": "OK",
+    "endpoints": {
+      "stats": "OK",
+      "movies": "OK",
+      "series": "OK"
+    }
+  },
+  "bot": {
+    "connected": true,
+    "username": "PopCornMiniApp_bot",
+    "name": "Popcorn 🍿",
+    "webhook": null,
+    "commands_count": 2
+  },
+  "files": {
+    "app/bot_commands.py": {
+      "exists": true,
+      "size": 60979
+    },
+    "app/config.py": {
+      "exists": true,
+      "size": 13309
+    },
+    "app/bot_tracking.py": {
+      "exists": true,
+      "size": 18973
+    },
+    "app/button_builders.py": {
+      "exists": true,
+      "size": 27036
+    },
+    "app/bot.py": {
+      "exists": true,
+      "size": 33387
+    },
+    "app/database.py": {
+      "exists": true,
+      "size": 133078
+    },
+    "app/main.py": {
+      "exists": true,
+      "size": 99397
+    }
+  }
+}

@@ -4,6 +4,7 @@ import MovieDetail from "./pages/MovieDetail";
 import SeriesDetail from "./pages/SeriesDetail";
 import SearchPage from "./pages/SearchPage";
 import BrowsePage from "./pages/BrowsePage";
+import AdminDashboard from "./pages/AdminDashboard";
 import NavBar from "./components/NavBar";
 
 declare global {
@@ -29,7 +30,8 @@ type Route =
   | { page: "movie"; id: string }
   | { page: "series"; id: string }
   | { page: "search" }
-  | { page: "browse"; type?: "movies" | "series"; genre?: string };
+  | { page: "browse"; type?: "movies" | "series"; genre?: string }
+  | { page: "admin" };
 
 export default function App() {
   const [route, setRoute] = useState<Route>({ page: "home" });
@@ -50,6 +52,7 @@ export default function App() {
     if (h === "#/movies") navigate({ page: "browse", type: "movies" });
     else if (h === "#/series") navigate({ page: "browse", type: "series" });
     else if (h === "#/search") navigate({ page: "search" });
+    else if (h === "#/admin") navigate({ page: "admin" });
   }, []);
 
   const goBack = useCallback(() => {
@@ -81,10 +84,11 @@ export default function App() {
   };
 
   const isDetail = route.page === "movie" || route.page === "series";
+  const isAdmin = route.page === "admin";
   const browseType = route.page === "browse" ? (route as any).type : undefined;
 
   return (
-    <div style={{ minHeight: "100vh", background: "#0d0d0d", paddingBottom: isDetail ? 0 : 70 }}>
+    <div style={{ minHeight: "100vh", background: "#0d0d0d", paddingBottom: isDetail || isAdmin ? 0 : 70 }}>
       {route.page === "home"   && <Home navigate={navigate} />}
       {route.page === "movie"  && <MovieDetail id={(route as any).id} navigate={navigate} goBack={goBack} />}
       {route.page === "series" && <SeriesDetail id={(route as any).id} navigate={navigate} goBack={goBack} />}
@@ -92,7 +96,8 @@ export default function App() {
       {route.page === "browse" && (
         <BrowsePage type={(route as any).type} genre={(route as any).genre} navigate={navigate} goBack={goBack} />
       )}
-      {!isDetail && <NavBar current={route.page} browseType={browseType} navigate={navigate} />}
+      {route.page === "admin" && <AdminDashboard goBack={goBack} />}
+      {!isDetail && !isAdmin && <NavBar current={route.page} browseType={browseType} navigate={navigate} />}
     </div>
   );
 }

@@ -1,0 +1,9 @@
+{
+  "timestamp": "2026-05-09T22:34:19.889937",
+  "space_id": "ToolKit-backend/PopCorn",
+  "stage": "RUNNING",
+  "hardware": "cpu-basic",
+  "error_message": null,
+  "sdk": "docker",
+  "log_files": []
+}

@@ -1,0 +1,67 @@
+{
+  "timestamp": "2026-05-09T03:35:00Z",
+  "current_capacity": {
+    "concurrent_users": 10,
+    "requests_per_second": 1,
+    "status": "1 Space running"
+  },
+  "full_capacity": {
+    "concurrent_users": 30,
+    "requests_per_second": 5,
+    "streaming_users": 300,
+    "status": "5 Spaces + 7 Datasets"
+  },
+  "with_load_balancing": {
+    "concurrent_users": 45,
+    "improvement": "50%"
+  },
+  "scenarios": {
+    "تصفح عادي": {
+      "users": 45,
+      "description": "مستخدمون يتصفحون المحتوى"
+    },
+    "مشاهدة متوسطة": {
+      "users": 31,
+      "description": "70% يشاهدون محتوى"
+    },
+    "ذروة الاستخدام": {
+      "users": 22,
+      "description": "جميع المستخدمين نشطون"
+    },
+    "بث مباشر": {
+      "users": 300,
+      "description": "مستخدمون يشاهدون بث مباشر"
+    }
+  },
+  "resources": {
+    "spaces": {
+      "ToolKit-backend/PopCorn": {
+        "cpu": "2 vCPU",
+        "ram": "16 GB",
+        "status": "RUNNING"
+      },
+      "ToolKit-backend/popcorn-main": {
+        "cpu": "2 vCPU",
+        "ram": "16 GB",
+        "status": "BUILDING"
+      },
+      "ToolKit-backend/popcorn-streaming": {
+        "cpu": "2 vCPU",
+        "ram": "16 GB",
+        "status": "BUILDING"
+      },
+      "rayig/popcorn-backup": {
+        "cpu": "2 vCPU",
+        "ram": "16 GB",
+        "status": "DEPLOYED"
+      },
+      "rayig/popcorn-analytics": {
+        "cpu": "2 vCPU",
+        "ram": "16 GB",
+        "status": "DEPLOYED"
+      }
+    },
+    "datasets": 7,
+    "total_storage_gb": 45
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "timestamp": "2026-05-10T01:26:40.282464",
+  "tests": {
+    "bot_initialization": true,
+    "bot_commands": true,
+    "button_builders": false,
+    "admin_permissions": false,
+    "bot_tracking": false,
+    "subscription_checker": false,
+    "pyrogram_clients": true
+  },
+  "summary": {
+    "total": 7,
+    "passed": 3,
+    "failed": 4,
+    "success_rate": "42.9%"
+  }
+}

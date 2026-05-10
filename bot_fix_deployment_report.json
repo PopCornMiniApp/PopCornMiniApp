@@ -1,0 +1,17 @@
+{
+  "deployment_time": "2026-05-09T21:39:28.113501",
+  "space_id": "ToolKit-backend/PopCorn",
+  "files_deployed": [
+    "app/bot.py"
+  ],
+  "results": {
+    "app/bot.py": {
+      "success": true,
+      "timestamp": "2026-05-09T21:38:55.674159"
+    }
+  },
+  "success_count": 1,
+  "total_count": 1,
+  "initial_status": "RUNNING",
+  "fix_description": "Fixed database function calls to use actual signatures"
+}

@@ -1,0 +1,17 @@
+{
+  "timestamp": "2026-05-09T06:07:24.363245",
+  "total_tests": 89,
+  "passed": 88,
+  "failed": 0,
+  "warnings": 1,
+  "errors": [],
+  "warnings_list": [
+    {
+      "category": "Environment",
+      "message": "Missing variables: MAIN_BOT_TOKEN, ADMIN_ID, PRIVATE_GROUPE_1_ID, SESSION_1_API_ID, SESSION_1_API_HASH, HF_TOKEN_1, HF_TOKEN_2",
+      "severity": "high"
+    }
+  ],
+  "fixes_applied": [],
+  "test_details": {}
+}

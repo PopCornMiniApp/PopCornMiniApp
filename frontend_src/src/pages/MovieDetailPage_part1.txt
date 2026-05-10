@@ -1,0 +1,55 @@
+import React, { useEffect, useState, useRef } from 'react'
+import { useParams, useNavigate } from 'react-router-dom'
+import { 
+  ArrowRight, Play, Pause, Heart, Share2, Star, Calendar, Clock, 
+  Film, Users, X, Volume2, VolumeX, Maximize, Minimize, ChevronDown, 
+  ChevronUp, Globe, DollarSign, Award, TrendingUp, MessageCircle,
+  ThumbsUp, ThumbsDown, Send, Bookmark, Info, MapPin, Languages,
+  Building2, Clapperboard
+} from 'lucide-react'
+import { decodeContentUrl } from '../utils/urlEncoder'
+import { api, storage } from '../utils/api'
+import { useStore } from '../store/useStore'
+import {
+  getBackdropUrl,
+  getPosterUrl,
+  formatDuration,
+  formatDate,
+  getRatingColor,
+  shareContent,
+  hapticFeedback,
+} from '../utils/helpers'
+import ContentCard from '../components/ContentCard'
+
+export default function MovieDetailPage() {
+  const { encodedId } = useParams()
+  const navigate = useNavigate()
+  const { favorites, addFavorite, removeFavorite } = useStore()
+  const videoRef = useRef(null)
+  const playerContainerRef = useRef(null)
+  
+  const [content, setContent] = useState(null)
+  const [similar, setSimilar] = useState([])
+  const [cast, setCast] = useState([])
+  const [crew, setCrew] = useState([])
+  const [reviews, setReviews] = useState([])
+  const [userReview, setUserReview] = useState({ rating: 0, comment: '' })
+  const [loading, setLoading] = useState(true)
+  const [isFavorite, setIsFavorite] = useState(false)
+  const [expandedDescription, setExpandedDescription] = useState(false)
+  const [showAllCast, setShowAllCast] = useState(false)
+  const [showAllCrew, setShowAllCrew] = useState(false)
+  const [activeTab, setActiveTab] = useState('overview')
+  
+  // Video player state
+  const [showPlayer, setShowPlayer] = useState(false)
+  const [playing, setPlaying] = useState(false)
+  const [muted, setMuted] = useState(false)
+  const [fullscreen, setFullscreen] = useState(false)
+  const [currentTime, setCurrentTime] = useState(0)
+  const [duration, setDuration] = useState(0)
+  const [showControls, setShowControls] = useState(true)
+  const [buffering, setBuffering] = useState(false)
+  const [streamError, setStreamError] = useState(false)
+  const [playbackSpeed, setPlaybackSpeed] = useState(1)
+  const [volume, setVolume] = useState(1)

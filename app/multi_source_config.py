@@ -13,6 +13,7 @@ from typing import Dict, List, Tuple
 from dataclasses import dataclass
 import time
 
+
 @dataclass
 class StreamBot:
     """Streaming bot configuration"""
@@ -23,23 +24,23 @@ class StreamBot:
     total_streams: int = 0  # Total streams served
     last_error: float = 0  # Timestamp of last error
     error_count: int = 0  # Consecutive errors
-    
+
     def is_healthy(self) -> bool:
         """Check if bot is healthy and available"""
         if not self.active:
             return False
-        
+
         # If bot had errors in last 5 minutes, consider unhealthy
         if self.error_count > 3 and (time.time() - self.last_error) < 300:
             return False
-        
+
         return True
-    
+
     def record_error(self):
         """Record an error for this bot"""
         self.error_count += 1
         self.last_error = time.time()
-    
+
     def reset_errors(self):
         """Reset error counter (after successful stream)"""
         self.error_count = 0
@@ -56,7 +57,7 @@ class MirrorGroup:
     total_streams: int = 0  # Total streams served
     last_sync: float = 0  # Last sync timestamp
     file_count: int = 0  # Number of files in this group
-    
+
     def is_healthy(self) -> bool:
         """Check if group is healthy and available"""
         return self.active and self.file_count > 0
@@ -76,7 +77,7 @@ STREAM_BOTS: Dict[str, StreamBot] = {
         name="stream2",
         token="8358623405:AAEHWckq3vtdVjSebLuHC1a-BXUuSBJ2sCI"
     ),
-    
+
     # New streaming bots
     "popcornapp1": StreamBot(
         name="popcornapp1",
@@ -126,7 +127,7 @@ MIRROR_GROUPS: Dict[str, MirrorGroup] = {
         name="main",
         group_id=-1003826837517  # POPCORN DB (main)
     ),
-    
+
     # Mirror groups
     "mirror1": MirrorGroup(
         name="mirror1",
@@ -214,23 +215,24 @@ MAX_CHUNK_SIZE = 1024 * 1024  # 1 MB max chunk
 # HELPER FUNCTIONS
 # ============================================================================
 
+
 def get_least_loaded_bot() -> Tuple[str, StreamBot]:
     """Get the bot with the lowest current load"""
     healthy_bots = {
         name: bot for name, bot in STREAM_BOTS.items()
         if bot.is_healthy()
     }
-    
+
     if not healthy_bots:
         # Fallback to first bot if all unhealthy
         return list(STREAM_BOTS.items())[0]
-    
+
     # Sort by load, then by total streams (prefer less used bots)
     sorted_bots = sorted(
         healthy_bots.items(),
         key=lambda x: (x[1].current_load, x[1].total_streams)
     )
-    
+
     return sorted_bots[0]
 
 
@@ -240,30 +242,30 @@ def get_least_loaded_group() -> Tuple[str, MirrorGroup]:
         name: group for name, group in MIRROR_GROUPS.items()
         if group.is_healthy()
     }
-    
+
     if not healthy_groups:
         # Fallback to main group
         return "main", MIRROR_GROUPS["main"]
-    
+
     # Sort by load, then by total streams
     sorted_groups = sorted(
         healthy_groups.items(),
         key=lambda x: (x[1].current_load, x[1].total_streams)
     )
-    
+
     return sorted_groups[0]
 
 
 def get_optimal_source() -> Tuple[str, StreamBot, str, MirrorGroup]:
     """
     Get the optimal bot and group combination for streaming.
-    
+
     Returns:
         Tuple of (bot_name, bot, group_name, group)
     """
     bot_name, bot = get_least_loaded_bot()
     group_name, group = get_least_loaded_group()
-    
+
     return bot_name, bot, group_name, group
 
 
@@ -284,7 +286,7 @@ def should_ignore_topic(topic_name: str) -> bool:
     """Check if a topic should be ignored during sync"""
     if not topic_name:
         return False
-    
+
     topic_lower = topic_name.lower().strip()
     return any(
         ignored.lower() in topic_lower
@@ -302,71 +304,81 @@ def get_system_stats() -> dict:
     healthy_bots = sum(1 for bot in STREAM_BOTS.values() if bot.is_healthy())
     total_bot_load = sum(bot.current_load for bot in STREAM_BOTS.values())
     total_bot_streams = sum(bot.total_streams for bot in STREAM_BOTS.values())
-    
+
     total_groups = len(MIRROR_GROUPS)
-    healthy_groups = sum(1 for group in MIRROR_GROUPS.values() if group.is_healthy())
-    total_group_load = sum(group.current_load for group in MIRROR_GROUPS.values())
-    total_group_streams = sum(group.total_streams for group in MIRROR_GROUPS.values())
-    
+    healthy_groups = sum(
+        1 for group in MIRROR_GROUPS.values() if group.is_healthy())
+    total_group_load = sum(
+        group.current_load for group in MIRROR_GROUPS.values())
+    total_group_streams = sum(
+        group.total_streams for group in MIRROR_GROUPS.values())
+
     return {
         "bots": {
             "total": total_bots,
             "healthy": healthy_bots,
             "current_load": total_bot_load,
             "total_streams": total_bot_streams,
-            "average_load": total_bot_load / total_bots if total_bots > 0 else 0
-        },
+            "average_load": total_bot_load /
+            total_bots if total_bots > 0 else 0},
         "groups": {
             "total": total_groups,
             "healthy": healthy_groups,
             "current_load": total_group_load,
             "total_streams": total_group_streams,
-            "average_load": total_group_load / total_groups if total_groups > 0 else 0
-        },
+            "average_load": total_group_load /
+            total_groups if total_groups > 0 else 0},
         "system": {
-            "total_capacity": total_bots * MAX_BOT_LOAD,
+            "total_capacity": total_bots *
+            MAX_BOT_LOAD,
             "used_capacity": total_bot_load,
-            "capacity_percentage": (total_bot_load / (total_bots * MAX_BOT_LOAD) * 100) if total_bots > 0 else 0
-        }
-    }
+            "capacity_percentage": (
+                total_bot_load /
+                (
+                    total_bots *
+                    MAX_BOT_LOAD) *
+                100) if total_bots > 0 else 0}}
 
 
 def print_system_status():
     """Print system status (for debugging)"""
     stats = get_system_stats()
-    
-    print("\n" + "="*60)
+
+    print("\n" + "=" * 60)
     print("POPCORN STREAMING SYSTEM STATUS")
-    print("="*60)
-    
-    print(f"\n📊 BOTS: {stats['bots']['healthy']}/{stats['bots']['total']} healthy")
+    print("=" * 60)
+
+    print(
+        f"\n📊 BOTS: {stats['bots']['healthy']}/{stats['bots']['total']} healthy")
     print(f"   Current Load: {stats['bots']['current_load']}")
     print(f"   Total Streams: {stats['bots']['total_streams']}")
     print(f"   Average Load: {stats['bots']['average_load']:.1f}")
-    
-    print(f"\n📁 GROUPS: {stats['groups']['healthy']}/{stats['groups']['total']} healthy")
+
+    print(
+        f"\n📁 GROUPS: {stats['groups']['healthy']}/{stats['groups']['total']} healthy")
     print(f"   Current Load: {stats['groups']['current_load']}")
     print(f"   Total Streams: {stats['groups']['total_streams']}")
     print(f"   Average Load: {stats['groups']['average_load']:.1f}")
-    
-    print(f"\n⚡ SYSTEM:")
-    print(f"   Capacity: {stats['system']['used_capacity']}/{stats['system']['total_capacity']}")
+
+    print("\n⚡ SYSTEM:")
+    print(
+        f"   Capacity: {stats['system']['used_capacity']}/{stats['system']['total_capacity']}")
     print(f"   Usage: {stats['system']['capacity_percentage']:.1f}%")
-    
-    print("\n" + "="*60 + "\n")
+
+    print("\n" + "=" * 60 + "\n")
 
 
 if __name__ == "__main__":
     # Test configuration
     print_system_status()
-    
+
     print("Testing optimal source selection:")
     for i in range(5):
         bot_name, bot, group_name, group = get_optimal_source()
         print(f"  Stream {i+1}: Bot={bot_name}, Group={group_name}")
         bot.current_load += 1
         group.current_load += 1
-    
+
     print("\nAfter load simulation:")
     print_system_status()
 

@@ -22,10 +22,8 @@ async def fetch_movie(tmdb_id: int) -> dict | None:
         cast = []
         director = ""
         if "credits" in data:
-            cast = [
-                {"name": m["name"], "character": m.get("character", ""), "profile": _img(m.get("profile_path"), "w185")}
-                for m in data["credits"].get("cast", [])[:15]
-            ]
+            cast = [{"name": m["name"], "character": m.get("character", ""), "profile": _img(
+                m.get("profile_path"), "w185")} for m in data["credits"].get("cast", [])[:15]]
             for c in data["credits"].get("crew", []):
                 if c.get("job") == "Director":
                     director = c["name"]
@@ -77,10 +75,8 @@ async def fetch_series(tmdb_id: int) -> dict | None:
 
         cast = []
         if "credits" in data:
-            cast = [
-                {"name": m["name"], "character": m.get("character", ""), "profile": _img(m.get("profile_path"), "w185")}
-                for m in data["credits"].get("cast", [])[:15]
-            ]
+            cast = [{"name": m["name"], "character": m.get("character", ""), "profile": _img(
+                m.get("profile_path"), "w185")} for m in data["credits"].get("cast", [])[:15]]
 
         creators = [c["name"] for c in data.get("created_by", [])]
         genres = [g["name"] for g in data.get("genres", [])]
@@ -115,7 +111,10 @@ async def fetch_series(tmdb_id: int) -> dict | None:
         return None
 
 
-async def fetch_episode_info(tmdb_id: int, season: int, episode: int) -> dict | None:
+async def fetch_episode_info(
+        tmdb_id: int,
+        season: int,
+        episode: int) -> dict | None:
     url = f"{TMDB_BASE_URL}/tv/{tmdb_id}/season/{season}/episode/{episode}"
     params = {"api_key": TMDB_API_KEY, "language": "ar-SA"}
     try:
@@ -149,6 +148,122 @@ async def _fetch_ar_translations(tmdb_id: int, media_type: str) -> dict:
     except Exception:
         pass
     return {}
+
+
+async def fetch_movie_cast(tmdb_id: int) -> list:
+    """Fetch cast information for a movie from TMDB"""
+    url = f"{TMDB_BASE_URL}/movie/{tmdb_id}/credits"
+    params = {"api_key": TMDB_API_KEY}
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(url, params=params)
+            r.raise_for_status()
+            data = r.json()
+        
+        cast = []
+        for member in data.get("cast", [])[:20]:  # Get top 20 cast members
+            cast.append({
+                "id": member.get("id"),
+                "name": member.get("name", ""),
+                "character": member.get("character", ""),
+                "profile_path": _img(member.get("profile_path"), "w185"),
+                "order": member.get("order", 999)
+            })
+        return cast
+    except Exception as e:
+        logger.error(f"TMDB cast fetch error for movie {tmdb_id}: {e}")
+        return []
+
+
+async def fetch_series_cast(tmdb_id: int) -> list:
+    """Fetch cast information for a TV series from TMDB"""
+    url = f"{TMDB_BASE_URL}/tv/{tmdb_id}/credits"
+    params = {"api_key": TMDB_API_KEY}
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(url, params=params)
+            r.raise_for_status()
+            data = r.json()
+        
+        cast = []
+        for member in data.get("cast", [])[:20]:  # Get top 20 cast members
+            cast.append({
+                "id": member.get("id"),
+                "name": member.get("name", ""),
+                "character": member.get("character", ""),
+                "profile_path": _img(member.get("profile_path"), "w185"),
+                "order": member.get("order", 999)
+            })
+        return cast
+    except Exception as e:
+        logger.error(f"TMDB cast fetch error for series {tmdb_id}: {e}")
+        return []
+
+
+async def fetch_movie_reviews(tmdb_id: int) -> list:
+    """Fetch reviews for a movie from TMDB"""
+    url = f"{TMDB_BASE_URL}/movie/{tmdb_id}/reviews"
+    params = {"api_key": TMDB_API_KEY, "language": "en-US"}
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(url, params=params)
+            r.raise_for_status()
+            data = r.json()
+        
+        reviews = []
+        for review in data.get("results", [])[:10]:  # Get top 10 reviews
+            author_details = review.get("author_details", {})
+            reviews.append({
+                "id": review.get("id"),
+                "author": review.get("author", "Anonymous"),
+                "author_details": {
+                    "name": author_details.get("name", ""),
+                    "username": author_details.get("username", ""),
+                    "avatar_path": _img(author_details.get("avatar_path"), "w45") if author_details.get("avatar_path") and not author_details.get("avatar_path", "").startswith("http") else author_details.get("avatar_path", ""),
+                    "rating": author_details.get("rating")
+                },
+                "content": review.get("content", ""),
+                "created_at": review.get("created_at", ""),
+                "updated_at": review.get("updated_at", ""),
+                "url": review.get("url", "")
+            })
+        return reviews
+    except Exception as e:
+        logger.error(f"TMDB reviews fetch error for movie {tmdb_id}: {e}")
+        return []
+
+
+async def fetch_series_reviews(tmdb_id: int) -> list:
+    """Fetch reviews for a TV series from TMDB"""
+    url = f"{TMDB_BASE_URL}/tv/{tmdb_id}/reviews"
+    params = {"api_key": TMDB_API_KEY, "language": "en-US"}
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(url, params=params)
+            r.raise_for_status()
+            data = r.json()
+        
+        reviews = []
+        for review in data.get("results", [])[:10]:  # Get top 10 reviews
+            author_details = review.get("author_details", {})
+            reviews.append({
+                "id": review.get("id"),
+                "author": review.get("author", "Anonymous"),
+                "author_details": {
+                    "name": author_details.get("name", ""),
+                    "username": author_details.get("username", ""),
+                    "avatar_path": _img(author_details.get("avatar_path"), "w45") if author_details.get("avatar_path") and not author_details.get("avatar_path", "").startswith("http") else author_details.get("avatar_path", ""),
+                    "rating": author_details.get("rating")
+                },
+                "content": review.get("content", ""),
+                "created_at": review.get("created_at", ""),
+                "updated_at": review.get("updated_at", ""),
+                "url": review.get("url", "")
+            })
+        return reviews
+    except Exception as e:
+        logger.error(f"TMDB reviews fetch error for series {tmdb_id}: {e}")
+        return []
 
 
 def _img(path: str | None, size: str) -> str:

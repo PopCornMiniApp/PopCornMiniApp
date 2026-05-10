@@ -1,0 +1,58 @@
+
+============================================================
+Caching Optimization
+============================================================
+
+# Add to app/main.py after imports
+from fastapi.responses import Response
+from datetime import timedelta
+
+# Cache static files for 1 hour
+@app.middleware("http")
+async def add_cache_headers(request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/static"):
+        response.headers["Cache-Control"] = "public, max-age=3600"
+    return response
+
+
+============================================================
+Database Optimization
+============================================================
+
+# Database optimizations to apply:
+
+1. Add indexes for frequently queried columns:
+   CREATE INDEX IF NOT EXISTS idx_movies_tmdb_id ON movies(tmdb_id);
+   CREATE INDEX IF NOT EXISTS idx_series_tmdb_id ON series(tmdb_id);
+   CREATE INDEX IF NOT EXISTS idx_episodes_series_id ON episodes(series_id);
+
+2. Use connection pooling (already implemented)
+
+3. Add query result caching for expensive queries
+
+
+============================================================
+Compression Optimization
+============================================================
+
+# Add to app/main.py
+from fastapi.middleware.gzip import GZipMiddleware
+
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+
+============================================================
+Monitoring Optimization
+============================================================
+
+# Add simple monitoring endpoint
+@app.get("/metrics")
+async def metrics():
+    import psutil
+    return {
+        "cpu_percent": psutil.cpu_percent(),
+        "memory_percent": psutil.virtual_memory().percent,
+        "disk_percent": psutil.disk_usage('/').percent
+    }
+

@@ -1,0 +1,354 @@
+{
+  "total_tests": 18,
+  "passed_tests": 2,
+  "failed_tests": 16,
+  "total_duration": 24.440553426742554,
+  "success_rate": 11.11111111111111,
+  "results": [
+    {
+      "test_name": "API Endpoints Performance",
+      "success": false,
+      "duration": 0.12593650817871094,
+      "metrics": {
+        "min_response_time": 0.0023834705352783203,
+        "max_response_time": 0.07668757438659668,
+        "avg_response_time": 0.012186312675476074,
+        "median_response_time": 0.004647731781005859,
+        "std_dev": 0.022850573633574508,
+        "success_rate": 50.0,
+        "total_requests": 10,
+        "requests_per_second": 79.40509185636179
+      },
+      "errors": [
+        "/api/search: Status 422",
+        "/api/trending: Status 404",
+        "/api/popular: Status 404",
+        "/api/latest: Status 404",
+        "/api/rooms: Status 404"
+      ],
+      "timestamp": "2026-05-09T02:28:11.210013"
+    },
+    {
+      "test_name": "Database Performance",
+      "success": false,
+      "duration": 0.00011563301086425781,
+      "metrics": {
+        "min_response_time": 0,
+        "max_response_time": 0,
+        "avg_response_time": 0,
+        "median_response_time": 0,
+        "std_dev": 0,
+        "success_rate": 0.0,
+        "total_requests": 1,
+        "requests_per_second": 8648.049484536083
+      },
+      "errors": [
+        "Database error: unable to open database file"
+      ],
+      "timestamp": "2026-05-09T02:28:11.210243"
+    },
+    {
+      "test_name": "Search and Filter Performance",
+      "success": true,
+      "duration": 0.07812738418579102,
+      "metrics": {
+        "min_response_time": 0.005652427673339844,
+        "max_response_time": 0.01044774055480957,
+        "avg_response_time": 0.00756843090057373,
+        "median_response_time": 0.007062077522277832,
+        "std_dev": 0.0018459318156743296,
+        "success_rate": 100.0,
+        "total_requests": 10,
+        "requests_per_second": 127.99609386920565
+      },
+      "errors": [],
+      "timestamp": "2026-05-09T02:28:11.288762"
+    },
+    {
+      "test_name": "Concurrent Users Test (50 users)",
+      "success": false,
+      "duration": 1.189269781112671,
+      "metrics": {
+        "min_response_time": 0.0342252254486084,
+        "max_response_time": 0.8319180011749268,
+        "avg_response_time": 0.37618825753529866,
+        "median_response_time": 0.21788549423217773,
+        "std_dev": 0.30890669433803414,
+        "success_rate": 66.66666666666666,
+        "total_requests": 150,
+        "requests_per_second": 126.12781589359922
+      },
+      "errors": [],
+      "timestamp": "2026-05-09T02:28:12.478732"
+    },
+    {
+      "test_name": "Concurrent Users Test (100 users)",
+      "success": false,
+      "duration": 2.3581862449645996,
+      "metrics": {
+        "min_response_time": 0.19658708572387695,
+        "max_response_time": 1.5997567176818848,
+        "avg_response_time": 0.749076460202535,
+        "median_response_time": 0.5094567537307739,
+        "std_dev": 0.49959337859250275,
+        "success_rate": 66.66666666666666,
+        "total_requests": 300,
+        "requests_per_second": 127.21641500563646
+      },
+      "errors": [],
+      "timestamp": "2026-05-09T02:28:14.838161"
+    },
+    {
+      "test_name": "Unknown Test",
+      "success": false,
+      "duration": 0,
+      "metrics": {},
+      "errors": [
+        "'PerformanceMetrics' object has no attribute 'success_rate'"
+      ],
+      "timestamp": "2026-05-09T02:28:19.846989"
+    },
+    {
+      "test_name": "Unknown Test",
+      "success": false,
+      "duration": 0,
+      "metrics": {},
+      "errors": [
+        "'PerformanceMetrics' object has no attribute 'success_rate'"
+      ],
+      "timestamp": "2026-05-09T02:28:24.856810"
+    },
+    {
+      "test_name": "Streaming Capacity Test (5 streams)",
+      "success": false,
+      "duration": 0.07216882705688477,
+      "metrics": {
+        "min_response_time": 0.06758999824523926,
+        "max_response_time": 0.07073259353637695,
+        "avg_response_time": 0.06908822059631348,
+        "median_response_time": 0.06913948059082031,
+        "std_dev": 0.0011398912323257846,
+        "success_rate": 0.0,
+        "total_requests": 5,
+        "requests_per_second": 69.28199063092588,
+        "avg_bandwidth_bps": 0.0,
+        "total_bandwidth_mbps": 0.0
+      },
+      "errors": [],
+      "timestamp": "2026-05-09T02:28:24.929345"
+    },
+    {
+      "test_name": "Streaming Capacity Test (10 streams)",
+      "success": false,
+      "duration": 0.04860329627990723,
+      "metrics": {
+        "min_response_time": 0.04230141639709473,
+        "max_response_time": 0.04775571823120117,
+        "avg_response_time": 0.04523072242736816,
+        "median_response_time": 0.045945167541503906,
+        "std_dev": 0.0016693132513114519,
+        "success_rate": 0.0,
+        "total_requests": 10,
+        "requests_per_second": 205.74736212148713,
+        "avg_bandwidth_bps": 0.0,
+        "total_bandwidth_mbps": 0.0
+      },
+      "errors": [],
+      "timestamp": "2026-05-09T02:28:24.978385"
+    },
+    {
+      "test_name": "Bot Failover Test",
+      "success": true,
+      "duration": 0.016431331634521484,
+      "metrics": {
+        "min_response_time": 0.002424478530883789,
+        "max_response_time": 0.0067272186279296875,
+        "avg_response_time": 0.0038434267044067383,
+        "median_response_time": 0.0031110048294067383,
+        "std_dev": 0.002010420354538925,
+        "success_rate": 0.0,
+        "total_requests": 4,
+        "requests_per_second": 243.43736034127514
+      },
+      "errors": [],
+      "timestamp": "2026-05-09T02:28:24.995067"
+    },
+    {
+      "test_name": "Unknown Test",
+      "success": false,
+      "duration": 0,
+      "metrics": {},
+      "errors": [
+        "'PerformanceMetrics' object has no attribute 'success_rate'"
+      ],
+      "timestamp": "2026-05-09T02:28:25.927056"
+    },
+    {
+      "test_name": "WebSocket Connections Test (50 connections)",
+      "success": false,
+      "duration": 0.17583584785461426,
+      "metrics": {
+        "min_response_time": 0.0020966529846191406,
+        "max_response_time": 0.00537109375,
+        "avg_response_time": 0.0033716583251953126,
+        "median_response_time": 0.0031064748764038086,
+        "std_dev": 0.0009159671639211831,
+        "success_rate": 0.0,
+        "total_requests": 50,
+        "requests_per_second": 284.356123111718,
+        "successful_connections": 0,
+        "connection_rate": 0.0
+      },
+      "errors": [],
+      "timestamp": "2026-05-09T02:28:26.103679"
+    },
+    {
+      "test_name": "Error Recovery Test",
+      "success": false,
+      "duration": 0.023797273635864258,
+      "metrics": {
+        "min_response_time": 0.002099752426147461,
+        "max_response_time": 0.008233785629272461,
+        "avg_response_time": 0.003695249557495117,
+        "median_response_time": 0.0029207468032836914,
+        "std_dev": 0.0023278486371295093,
+        "success_rate": 83.33333333333334,
+        "total_requests": 6,
+        "requests_per_second": 252.1297225812269,
+        "avg_recovery_time": 0.0024700164794921875,
+        "max_recovery_time": 0.003209829330444336
+      },
+      "errors": [
+        "/api/search: Expected 400, got 422"
+      ],
+      "timestamp": "2026-05-09T02:28:26.127903"
+    },
+    {
+      "test_name": "Unknown Test",
+      "success": false,
+      "duration": 0,
+      "metrics": {},
+      "errors": [
+        "'PerformanceMetrics' object has no attribute 'success_rate'"
+      ],
+      "timestamp": "2026-05-09T02:28:29.641654"
+    },
+    {
+      "test_name": "Database Heavy Load Test (5000 operations)",
+      "success": false,
+      "duration": 0.00020766258239746094,
+      "metrics": {
+        "min_response_time": 0,
+        "max_response_time": 0,
+        "avg_response_time": 0,
+        "median_response_time": 0,
+        "std_dev": 0,
+        "success_rate": 0.0,
+        "total_requests": 1,
+        "requests_per_second": 4815.50401836969
+      },
+      "errors": [
+        "Database heavy load error: unable to open database file"
+      ],
+      "timestamp": "2026-05-09T02:28:29.642290"
+    },
+    {
+      "test_name": "Database Concurrency Test (10 threads)",
+      "success": false,
+      "duration": 0.00881648063659668,
+      "metrics": {
+        "min_response_time": 0,
+        "max_response_time": 0,
+        "avg_response_time": 0,
+        "median_response_time": 0.0,
+        "std_dev": 0.0,
+        "success_rate": 0.0,
+        "total_requests": 10,
+        "requests_per_second": 1134.2394331918115
+      },
+      "errors": [
+        "Thread 0: unable to open database file",
+        "Thread 1: unable to open database file",
+        "Thread 2: unable to open database file",
+        "Thread 3: unable to open database file",
+        "Thread 4: unable to open database file",
+        "Thread 6: unable to open database file",
+        "Thread 5: unable to open database file",
+        "Thread 7: unable to open database file",
+        "Thread 8: unable to open database file",
+        "Thread 9: unable to open database file"
+      ],
+      "timestamp": "2026-05-09T02:28:29.651832"
+    },
+    {
+      "test_name": "Rate Limiting Test",
+      "success": false,
+      "duration": 3.8463988304138184,
+      "metrics": {
+        "min_response_time": 0.015059709548950195,
+        "max_response_time": 0.06261491775512695,
+        "avg_response_time": 0.019091670513153077,
+        "median_response_time": 0.017611265182495117,
+        "std_dev": 0.005340435056105581,
+        "success_rate": 100.0,
+        "total_requests": 200,
+        "requests_per_second": 51.996688023764506,
+        "rate_limited_requests": 0,
+        "rate_limit_percentage": 0.0
+      },
+      "errors": [],
+      "timestamp": "2026-05-09T02:28:33.500241"
+    },
+    {
+      "test_name": "Admin Permissions Test",
+      "success": false,
+      "duration": 0.01709723472595215,
+      "metrics": {
+        "min_response_time": 0.0022430419921875,
+        "max_response_time": 0.0060100555419921875,
+        "avg_response_time": 0.003721773624420166,
+        "median_response_time": 0.0033169984817504883,
+        "std_dev": 0.0016853447444373222,
+        "success_rate": 50.0,
+        "total_requests": 4,
+        "requests_per_second": 233.95596212575475
+      },
+      "errors": [
+        "/api/admin/logs: Expected 401/403, got 404",
+        "/api/admin/settings: Expected 401/403, got 404"
+      ],
+      "timestamp": "2026-05-09T02:28:33.518737"
+    }
+  ],
+  "system_metrics": {
+    "initial": {
+      "cpu_percent": 25.2,
+      "memory_percent": 84.2,
+      "memory_available_mb": 1231.97265625,
+      "memory_used_mb": 6586.4140625,
+      "disk_percent": 79.2,
+      "disk_free_gb": 22.976184844970703,
+      "timestamp": "2026-05-09T02:28:11.083677"
+    },
+    "final": {
+      "cpu_percent": 54.8,
+      "memory_percent": 83.4,
+      "memory_available_mb": 1297.01953125,
+      "memory_used_mb": 6521.3671875,
+      "disk_percent": 79.2,
+      "disk_free_gb": 22.976032257080078,
+      "timestamp": "2026-05-09T02:28:34.521284"
+    }
+  },
+  "recommendations": [
+    "⚠️ يوجد اختبارات فاشلة تحتاج إلى معالجة",
+    "✅ متوسط وقت الاستجابة ممتاز (0.09s)",
+    "⚠️ معدل النجاح منخفض (36.9%) - يحتاج تحسين الاستقرار",
+    "💡 استخدم caching لتحسين الأداء",
+    "💡 قم بتحسين استعلامات قاعدة البيانات",
+    "💡 استخدم connection pooling للاتصالات",
+    "💡 راقب استهلاك الموارد بشكل مستمر",
+    "💡 قم بإجراء اختبارات دورية تحت الضغط"
+  ],
+  "timestamp": "2026-05-09T02:28:34.527251"
+}

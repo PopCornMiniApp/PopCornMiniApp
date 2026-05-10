@@ -1,0 +1,52 @@
+[
+  {
+    "repo_id": "ToolKit-backend/PopCorn",
+    "description": "Main PopCorn Space",
+    "token_env": "HF_TOKEN_1",
+    "upload_success": true,
+    "build_success": true,
+    "final_status": "RUNNING",
+    "error": null,
+    "timestamp": "2026-05-09T09:41:58.685342"
+  },
+  {
+    "repo_id": "ToolKit-backend/popcorn-main",
+    "description": "PopCorn Main Space",
+    "token_env": "HF_TOKEN_1",
+    "upload_success": true,
+    "build_success": false,
+    "final_status": "BUILD_ERROR",
+    "error": null,
+    "timestamp": "2026-05-09T09:42:08.230881"
+  },
+  {
+    "repo_id": "ToolKit-backend/popcorn-streaming",
+    "description": "PopCorn Streaming Space (Currently Failing)",
+    "token_env": "HF_TOKEN_1",
+    "upload_success": true,
+    "build_success": false,
+    "final_status": "BUILD_ERROR",
+    "error": null,
+    "timestamp": "2026-05-09T09:42:27.926702"
+  },
+  {
+    "repo_id": "rayig/popcorn-backup",
+    "description": "PopCorn Backup Space",
+    "token_env": "HF_TOKEN_2",
+    "upload_success": true,
+    "build_success": false,
+    "final_status": "BUILD_ERROR",
+    "error": null,
+    "timestamp": "2026-05-09T09:42:47.922823"
+  },
+  {
+    "repo_id": "rayig/popcorn-analytics",
+    "description": "PopCorn Analytics Space",
+    "token_env": "HF_TOKEN_2",
+    "upload_success": true,
+    "build_success": false,
+    "final_status": "BUILD_ERROR",
+    "error": null,
+    "timestamp": "2026-05-09T09:43:08.214745"
+  }
+]

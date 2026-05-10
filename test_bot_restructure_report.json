@@ -1,0 +1,461 @@
+{
+  "summary": {
+    "total_tests": 56,
+    "passed": 56,
+    "failed": 0,
+    "warnings": 0,
+    "success_rate": 100.0,
+    "duration_seconds": 0.51,
+    "timestamp": "2026-05-09T11:35:12.039934"
+  },
+  "tests": [
+    {
+      "category": "File Structure",
+      "name": "Admin Permission System exists",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.525240"
+    },
+    {
+      "category": "File Structure",
+      "name": "Bot Tracking System exists",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.525267"
+    },
+    {
+      "category": "File Structure",
+      "name": "Button Builders exists",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.525278"
+    },
+    {
+      "category": "File Structure",
+      "name": "Subscription Checker exists",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.525287"
+    },
+    {
+      "category": "File Structure",
+      "name": "Main Bot Module exists",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.525296"
+    },
+    {
+      "category": "File Structure",
+      "name": "Bot Commands exists",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.525305"
+    },
+    {
+      "category": "File Structure",
+      "name": "Database Module exists",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.525314"
+    },
+    {
+      "category": "File Structure",
+      "name": "Configuration exists",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.525322"
+    },
+    {
+      "category": "Imports",
+      "name": "Import Admin Permissions",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.526850"
+    },
+    {
+      "category": "Imports",
+      "name": "Import Bot Tracking",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.937215"
+    },
+    {
+      "category": "Imports",
+      "name": "Import Button Builders",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.937719"
+    },
+    {
+      "category": "Imports",
+      "name": "Import Subscription Checker",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.955004"
+    },
+    {
+      "category": "Imports",
+      "name": "Import Configuration",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.955026"
+    },
+    {
+      "category": "Admin Permissions",
+      "name": "AdminRole enum defined",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.955042"
+    },
+    {
+      "category": "Admin Permissions",
+      "name": "Permission enum defined",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.955048"
+    },
+    {
+      "category": "Admin Permissions",
+      "name": "Role permissions mapping complete",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.955060"
+    },
+    {
+      "category": "Admin Permissions",
+      "name": "require_permission decorator exists",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.955064"
+    },
+    {
+      "category": "Admin Permissions",
+      "name": "require_admin decorator exists",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.955072"
+    },
+    {
+      "category": "Bot Tracking",
+      "name": "BotTracker class defined",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.955080"
+    },
+    {
+      "category": "Bot Tracking",
+      "name": "track_bot_interaction decorator exists",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.955084"
+    },
+    {
+      "category": "Bot Tracking",
+      "name": "Utility functions exist",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.955087"
+    },
+    {
+      "category": "Button Builders",
+      "name": "build_main_menu exists",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.955098"
+    },
+    {
+      "category": "Button Builders",
+      "name": "build_browse_buttons exists",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.955102"
+    },
+    {
+      "category": "Button Builders",
+      "name": "build_content_details_buttons exists",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.955106"
+    },
+    {
+      "category": "Button Builders",
+      "name": "build_season_buttons exists",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.955110"
+    },
+    {
+      "category": "Button Builders",
+      "name": "build_episode_buttons exists",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.955113"
+    },
+    {
+      "category": "Button Builders",
+      "name": "build_profile_menu exists",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.955117"
+    },
+    {
+      "category": "Button Builders",
+      "name": "build_admin_panel exists",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.955120"
+    },
+    {
+      "category": "Button Builders",
+      "name": "build_pagination_buttons exists",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.955124"
+    },
+    {
+      "category": "Button Builders",
+      "name": "build_back_button exists",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.955128"
+    },
+    {
+      "category": "Button Builders",
+      "name": "Main menu generates valid keyboard",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.955312"
+    },
+    {
+      "category": "Subscription Checker",
+      "name": "check_subscription exists",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.955328"
+    },
+    {
+      "category": "Subscription Checker",
+      "name": "require_subscription exists",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.955338"
+    },
+    {
+      "category": "Subscription Checker",
+      "name": "get_cache_stats exists",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.955342"
+    },
+    {
+      "category": "Subscription Checker",
+      "name": "clear_cache exists",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.955346"
+    },
+    {
+      "category": "Subscription Checker",
+      "name": "reset_cache_stats exists",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.955349"
+    },
+    {
+      "category": "Subscription Checker",
+      "name": "Cache stats structure valid",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.955375"
+    },
+    {
+      "category": "Bot Module",
+      "name": "Start command handler defined",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.955538"
+    },
+    {
+      "category": "Bot Module",
+      "name": "Main menu handler defined",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.955551"
+    },
+    {
+      "category": "Bot Module",
+      "name": "Browse movies handler defined",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.955561"
+    },
+    {
+      "category": "Bot Module",
+      "name": "Browse series handler defined",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.955571"
+    },
+    {
+      "category": "Bot Module",
+      "name": "Bot application creator defined",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.955584"
+    },
+    {
+      "category": "Bot Module",
+      "name": "Uses tracking decorator",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.955589"
+    },
+    {
+      "category": "Bot Module",
+      "name": "Uses subscription decorator",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.955601"
+    },
+    {
+      "category": "Configuration",
+      "name": "Bot token configured",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.955615"
+    },
+    {
+      "category": "Configuration",
+      "name": "Channel ID configured",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.955620"
+    },
+    {
+      "category": "Configuration",
+      "name": "Admin ID configured",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.955623"
+    },
+    {
+      "category": "Database Schema",
+      "name": "admin_users table can be created",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.975763"
+    },
+    {
+      "category": "Database Schema",
+      "name": "bot_sessions table can be created",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:11.995625"
+    },
+    {
+      "category": "Database Schema",
+      "name": "bot_interactions table can be created",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:12.019700"
+    },
+    {
+      "category": "Database Schema",
+      "name": "bot_button_clicks table can be created",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:12.038125"
+    },
+    {
+      "category": "Integration",
+      "name": "Subscription checker integration",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:12.039077"
+    },
+    {
+      "category": "Integration",
+      "name": "Bot tracking integration",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:12.039127"
+    },
+    {
+      "category": "Integration",
+      "name": "Button builders integration",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:12.039152"
+    },
+    {
+      "category": "Integration",
+      "name": "Bot commands use admin permissions",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:12.039726"
+    },
+    {
+      "category": "Integration",
+      "name": "Bot commands use button builders",
+      "passed": true,
+      "message": "",
+      "warning": false,
+      "timestamp": "2026-05-09T11:35:12.039757"
+    }
+  ]
+}

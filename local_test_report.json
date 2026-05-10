@@ -1,0 +1,183 @@
+{
+  "timestamp": "2026-05-10T01:24:27.692716",
+  "tests": {
+    "health": {
+      "status": "passed",
+      "data": {
+        "status": "ok",
+        "service": "PopCorn API 🍿",
+        "pyrogram": true,
+        "pyrogram_clients": 3
+      }
+    },
+    "stats": {
+      "status": "passed",
+      "data": {
+        "movies_count": 41,
+        "series_count": 17,
+        "episodes_count": 474,
+        "latest_movies": [
+          {
+            "id": "mid00042",
+            "title": "Dirty Dancing",
+            "title_ar": "Dirty Dancing",
+            "poster_path": "https://image.tmdb.org/t/p/w500/9Jw6jys7q9gjzVX5zm1z0gC8gY9.jpg",
+            "backdrop_path": "https://image.tmdb.org/t/p/w1280/6iDQCBUSZKzY8Rnu8ECwl2gXcfG.jpg",
+            "rating": 7.3,
+            "release_date": "1987-08-21",
+            "file_id": "BAACAgQAAyEFAATkGOgNAAIU22n-tC3y16ZGOMl-Uzfw6DjR1vswAAJ6CgACKMmpUeP9FddZTGUUOwQ"
+          },
+          {
+            "id": "mid00041",
+            "title": "98古惑仔之龍爭虎鬥",
+            "title_ar": "98古惑仔之龍爭虎鬥",
+            "poster_path": "https://image.tmdb.org/t/p/w500/8t86BIBKo8IuhsJPfIK6sccZq7k.jpg",
+            "backdrop_path": "https://image.tmdb.org/t/p/w1280/9BK9kPOkjsIfgdUWy0CmWviGOT3.jpg",
+            "rating": 6.4,
+            "release_date": "1998-01-22",
+            "file_id": "BAACAgEAAyEFAATkGOgNAAIU2Wn-sjW59ih3UzxtTt6K0xTwp3wMAAJWBQAC6WoxRCJx3SkESHauOwQ"
+          },
+          {
+            "id": "mid00040",
+            "title": "الميل الأخضر",
+            "title_ar": "الميل الأخضر",
+            "poster_path": "https://image.tmdb.org/t/p/w500/vAHuvaUC885P78BNS3BMu9qM7ve.jpg",
+            "backdrop_path": "https://image.tmdb.org/t/p/w1280/b6HWTOxn1xevvyHU2K9ICvaRU6g.jpg",
+            "rating": 8.5,
+            "release_date": "1999-12-10",
+            "file_id": "BAACAgQAAyEFAATkGOgNAAIU12n-saepuLGQcEzMNO2TURrk4JLoAAJvGQACBRNAUzpoIMxrReOUOwQ"
+          },
+          {
+            "id": "mid00034",
+            "title": "My Best Friend's Wedding",
+            "title_ar": "My Best Friend's Wedding",
+            "poster_path": "https://image.tmdb.org/t/p/w500/b5g4bp8gS5ovMyR5439AII6zQ3n.jpg",
+            "backdrop_path": "https://image.tmdb.org/t/p/w1280/naA6aqGYh8D8x2pODBAvFiqwuJh.jpg",
+            "rating": 6.6,
+            "release_date": "1997-06-19",
+            "file_id": "5864016422295834682"
+          },
+          {
+            "id": "mid00035",
+            "title": "Roald Dahl's The Witches",
+            "title_ar": "Roald Dahl's The Witches",
+            "poster_path": "https://image.tmdb.org/t/p/w500/ht6EfsM5hrsUPSR4ReJQFDVU71F.jpg",
+            "backdrop_path": "https://image.tmdb.org/t/p/w1280/4lWr2j3ZSEe8qlt3W3ma8TiiMQB.jpg",
+            "rating": 6.3,
+            "release_date": "2020-10-26",
+            "file_id": "5431486466532313567"
+          },
+          {
+            "id": "mid00036",
+            "title": "نادني باسمك",
+            "title_ar": "نادني باسمك",
+            "poster_path": "https://image.tmdb.org/t/p/w500/wEhAnKS1NmANa4QEVbCfeg2Ni9c.jpg",
+            "backdrop_path": "https://image.tmdb.org/t/p/w1280/fwf4L3r2ZU9ptOB9nOo5nuVLo1i.jpg",
+            "rating": 8.1,
+            "release_date": "2017-10-01",
+            "file_id": "5447535028445649904"
+          },
+          {
+            "id": "mid00037",
+            "title": "Irréversible",
+            "title_ar": "Irréversible",
+            "poster_path": "https://image.tmdb.org/t/p/w500/AdrItykbv1evqcbIPrItVWnkaKj.jpg",
+            "backdrop_path": "https://image.tmdb.org/t/p/w1280/xV1EfNSEg6id6juJPr1vM6p9x5X.jpg",
+            "rating": 7.2,
+            "release_date": "2002-05-22",
+            "file_id": "5429467866262937116"
+          },
+          {
+            "id": "mid00038",
+            "title": "ماري بوبينز",
+            "title_ar": "ماري بوبينز",
+            "poster_path": "https://image.tmdb.org/t/p/w500/pHyWpWn2pRIfhS3Arcn4SKtKKW4.jpg",
+            "backdrop_path": "https://image.tmdb.org/t/p/w1280/uS9QP9WfHMjNW65BYdY4nL80SRP.jpg",
+            "rating": 7.5,
+            "release_date": "1964-12-17",
+            "file_id": "5994703760192968429"
+          }
+        ],
+        "latest_series": [
+          {
+            "id": "sid00018",
+            "title": "The Royal Bodyguard",
+            "title_ar": "The Royal Bodyguard",
+            "poster_path": "https://image.tmdb.org/t/p/w500/l4y32vsPTdIZjukjALnOP1kc0pq.jpg",
+            "backdrop_path": "",
+            "rating": 3.9,
+            "first_air_date": "2011-12-26"
+          },
+          {
+            "id": "sid00016",
+            "title": "The Victim",
+            "title_ar": "The Victim",
+            "poster_path": "https://image.tmdb.org/t/p/w500/ow8vlCfGzZuUxipm0CNGRiCnSiX.jpg",
+            "backdrop_path": "https://image.tmdb.org/t/p/w1280/pFW3JgwvphY6HvyqOCN9IWRAtR9.jpg",
+            "rating": 7.2,
+            "first_air_date": "2019-04-08"
+          },
+          {
+            "id": "sid00015",
+            "title": "A Very English Scandal",
+            "title_ar": "A Very English Scandal",
+            "poster_path": "https://image.tmdb.org/t/p/w500/xQU99bLRjTegRSGScLDVqpcx5QV.jpg",
+            "backdrop_path": "https://image.tmdb.org/t/p/w1280/hEgzWYtXzbPVpNDWfAE9m273j6D.jpg",
+            "rating": 7.1,
+            "first_air_date": "2018-05-20"
+          },
+          {
+            "id": "sid00014",
+            "title": "خارج الدائرة",
+            "title_ar": "خارج الدائرة",
+            "poster_path": "https://image.tmdb.org/t/p/w500/oVl01a7R8rfmWrolWtrlPXYQqzj.jpg",
+            "backdrop_path": "https://image.tmdb.org/t/p/w1280/rfUT32eWuaYcs7pFSyhT08vfCaF.jpg",
+            "rating": 7.1,
+            "first_air_date": "2026-04-21"
+          },
+          {
+            "id": "sid00013",
+            "title": "State of Play",
+            "title_ar": "State of Play",
+            "poster_path": "https://image.tmdb.org/t/p/w500/qjgtpbPdj0sfhiCa79M5pS1pydT.jpg",
+            "backdrop_path": "https://image.tmdb.org/t/p/w1280/iRHtu9gEyYhyJW6VoIBvK0oqxu5.jpg",
+            "rating": 7.4,
+            "first_air_date": "2003-05-18"
+          },
+          {
+            "id": "sid00012",
+            "title": "SEAL Team",
+            "title_ar": "SEAL Team",
+            "poster_path": "https://image.tmdb.org/t/p/w500/6iSnec83UEMgLOXAtGYwaVNHLjR.jpg",
+            "backdrop_path": "https://image.tmdb.org/t/p/w1280/ojyo33io8HGxNCRg21Z1o87YEZX.jpg",
+            "rating": 8.0,
+            "first_air_date": "2017-09-27"
+          }
+        ]
+      }
+    },
+    "movies": {
+      "status": "passed",
+      "count": 0
+    },
+    "series": {
+      "status": "passed",
+      "count": 0
+    },
+    "frontend": {
+      "status": "passed",
+      "checks": {
+        "HTML": true,
+        "Title": true,
+        "Body": true
+      }
+    }
+  },
+  "summary": {
+    "total": 5,
+    "passed": 5,
+    "failed": 0,
+    "errors": 0,
+    "success_rate": "100.0%"
+  }
+}

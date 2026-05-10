@@ -1,0 +1,80 @@
+{
+  "timestamp": "2026-05-09T21:21:26.850383",
+  "checks": {
+    "environment_variables": {
+      "status": "FAIL",
+      "details": {
+        "missing": [
+          "MAIN_BOT_TOKEN (Telegram Bot Token)",
+          "HF_TOKEN (HuggingFace Token)",
+          "ADMIN_ID (Admin User ID)",
+          "PRIVATE_GROUP_ID (Private Group ID)",
+          "SESSION_1_API_ID (Pyrogram API ID)",
+          "SESSION_1_API_HASH (Pyrogram API Hash)"
+        ],
+        "invalid": []
+      },
+      "error": null
+    },
+    "code_files": {
+      "status": "PASS",
+      "details": {
+        "all_files_present": true,
+        "count": 8
+      },
+      "error": null
+    },
+    "bot_initialization": {
+      "status": "PASS",
+      "details": {
+        "all_checks_passed": true
+      },
+      "error": null
+    },
+    "telegram_api": {
+      "status": "SKIP",
+      "details": {
+        "reason": "No bot token available"
+      },
+      "error": null
+    },
+    "webhook_status": {
+      "status": "SKIP",
+      "details": {
+        "reason": "No bot token available"
+      },
+      "error": null
+    },
+    "bot_commands": {
+      "status": "SKIP",
+      "details": {
+        "reason": "No bot token available"
+      },
+      "error": null
+    },
+    "hf_space_status": {
+      "status": "SKIP",
+      "details": {
+        "reason": "No HF_TOKEN available"
+      },
+      "error": null
+    },
+    "local_bot_test": {
+      "status": "SKIP",
+      "details": {
+        "reason": "No bot token available"
+      },
+      "error": null
+    }
+  },
+  "errors": [
+    "Missing environment variables: MAIN_BOT_TOKEN (Telegram Bot Token), HF_TOKEN (HuggingFace Token), ADMIN_ID (Admin User ID), PRIVATE_GROUP_ID (Private Group ID), SESSION_1_API_ID (Pyrogram API ID), SESSION_1_API_HASH (Pyrogram API Hash)"
+  ],
+  "warnings": [],
+  "critical_issues": [
+    "environment_variables"
+  ],
+  "recommendations": [
+    "Set all required environment variables in HuggingFace Space settings"
+  ]
+}

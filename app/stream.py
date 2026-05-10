@@ -46,7 +46,7 @@ _rr_index: int = 0
 CHUNK_SIZE = 1024 * 1024   # Pyrogram internal chunk size = 1 MiB
 
 
-# ── File-info cache ───────────────────────────────────────────────────────────
+# ── File-info cache ─────────────────────────────────────────────────────
 
 _finfo: dict[str, dict] = {}
 _finfo_ts: dict[str, float] = {}
@@ -84,7 +84,7 @@ def _lookup_file_info(file_id: str) -> dict:
     return info
 
 
-# ── Pyrogram lifecycle ────────────────────────────────────────────────────────
+# ── Pyrogram lifecycle ──────────────────────────────────────────────────
 
 def _next_client():
     global _rr_index
@@ -104,7 +104,8 @@ def _restore_sessions() -> None:
     try:
         from huggingface_hub import hf_hub_download
         from app.config import HF_TOKEN, HF_DATASET_NAME
-        import shutil, os as _os
+        import shutil
+        import os as _os
         for nm in ("main", "s1", "s2"):
             fname = f"popcorn_{nm}.session"
             dest = f"/tmp/{fname}"
@@ -137,7 +138,9 @@ def _persist_sessions() -> None:
                     api.upload_file(
                         path_or_fileobj=fpath,
                         path_in_repo=f"popcorn_{nm}.session",
-                        repo_id=HF_DATASET_NAME, repo_type="dataset", token=HF_TOKEN,
+                        repo_id=HF_DATASET_NAME,
+                        repo_type="dataset",
+                        token=HF_TOKEN,
                     )
                     logger.info("📤 Persisted session: %s", nm)
                 except Exception as ue:
@@ -154,9 +157,19 @@ def _is_bot_token(v: str) -> bool:
 def _build_session_list() -> list[tuple]:
     sessions: list[tuple] = []
     if MAIN_BOT_TOKEN:
-        sessions.append((MAIN_BOT_TOKEN, SESSION_1_API_ID, SESSION_1_API_HASH, "main", True))
+        sessions.append(
+            (MAIN_BOT_TOKEN,
+             SESSION_1_API_ID,
+             SESSION_1_API_HASH,
+             "main",
+             True))
     if STREAM_BOT_1:
-        sessions.append((STREAM_BOT_1, SESSION_1_API_ID, SESSION_1_API_HASH, "s1", _is_bot_token(STREAM_BOT_1)))
+        sessions.append(
+            (STREAM_BOT_1,
+             SESSION_1_API_ID,
+             SESSION_1_API_HASH,
+             "s1",
+             _is_bot_token(STREAM_BOT_1)))
     if STREAM_BOT_2:
         sessions.append((STREAM_BOT_2,
                          SESSION_2_API_ID or SESSION_1_API_ID,
@@ -165,7 +178,13 @@ def _build_session_list() -> list[tuple]:
     return sessions
 
 
-async def _start_one_client(value, api_id, api_hash, name, is_bot, raw_channel_id) -> dict:
+async def _start_one_client(
+        value,
+        api_id,
+        api_hash,
+        name,
+        is_bot,
+        raw_channel_id) -> dict:
     """Try to start a single Pyrogram client. Returns an err_info dict."""
     from pyrogram import Client as _PyroClient  # type: ignore
 
@@ -246,7 +265,10 @@ async def _start_one_client(value, api_id, api_hash, name, is_bot, raw_channel_i
 async def _delayed_start(session_tuple, raw_channel_id, delay: int):
     """Background task: wait `delay` seconds then start the client."""
     value, api_id, api_hash, name, is_bot = session_tuple
-    logger.info("⏳ Waiting %ds (FloodWait) before retrying Pyrogram client '%s'…", delay, name)
+    logger.info(
+        "⏳ Waiting %ds (FloodWait) before retrying Pyrogram client '%s'…",
+        delay,
+        name)
     await asyncio.sleep(delay + 5)
     result = await _start_one_client(value, api_id, api_hash, name, is_bot, raw_channel_id)
     if "client" in result:
@@ -256,11 +278,14 @@ async def _delayed_start(session_tuple, raw_channel_id, delay: int):
         logger.info("✅ Delayed start of Pyrogram client '%s' succeeded", name)
     else:
         _pyro_start_errors.append(result)
-        logger.error("❌ Delayed start of Pyrogram client '%s' failed: %s", name, result.get("start_error"))
+        logger.error(
+            "❌ Delayed start of Pyrogram client '%s' failed: %s",
+            name,
+            result.get("start_error"))
 
 
 async def init_pyrogram():
-    global _pyro_clients, _pyro_start_errors
+    # global _pyro_clients  # Unused, _pyro_start_errors
     _pyro_clients.clear()
     _pyro_start_errors.clear()
 
@@ -296,7 +321,11 @@ async def init_pyrogram():
         flood_secs = result.get("flood_wait_seconds")
         if flood_secs is not None:
             # Schedule a background retry after the flood wait clears
-            asyncio.create_task(_delayed_start(session_tuple, raw_channel_id, flood_secs))
+            asyncio.create_task(
+                _delayed_start(
+                    session_tuple,
+                    raw_channel_id,
+                    flood_secs))
             _pyro_start_errors.append(result)
         elif "client" in result:
             _pyro_clients.append(result.pop("client"))
@@ -319,7 +348,7 @@ async def stop_pyrogram():
             pass
 
 
-# ── HTTP Range helpers ────────────────────────────────────────────────────────
+# ── HTTP Range helpers ──────────────────────────────────────────────────
 
 def _parse_range(header: str, file_size: int) -> tuple[int, int | None]:
     start, end = 0, (file_size - 1) if file_size > 0 else None
@@ -337,7 +366,7 @@ def _parse_range(header: str, file_size: int) -> tuple[int, int | None]:
     return start, end
 
 
-# ── Core Pyrogram streaming with pre-validation ───────────────────────────────
+# ── Core Pyrogram streaming with pre-validation ─────────────────────────
 
 async def _get_fresh_message(pyro, message_id: int):
     """
@@ -365,7 +394,7 @@ async def _get_fresh_message(pyro, message_id: int):
 
 
 async def _do_pyro_stream(pyro, file_id: str, message_id: int,
-                           request: Request, file_size: int) -> Response:
+                          request: Request, file_size: int) -> Response:
     """
     Stream a Telegram file via Pyrogram MTProto.
 
@@ -398,7 +427,8 @@ async def _do_pyro_stream(pyro, file_id: str, message_id: int,
     stream_target = await _get_fresh_message(pyro, message_id)
     if stream_target is None:
         # Could not get message — try with raw file_id as last resort
-        logger.warning("Falling back to raw file_id streaming (may fail if ref expired)")
+        logger.warning(
+            "Falling back to raw file_id streaming (may fail if ref expired)")
         stream_target = file_id
 
     # ── Step 2: pre-validate — fetch first chunk before committing headers ─
@@ -419,7 +449,8 @@ async def _do_pyro_stream(pyro, file_id: str, message_id: int,
     if not first_chunk_raw:
         logger.error(
             "Pyrogram stream_media returned empty for msg_id=%d file_id=%.20s…",
-            message_id, file_id,
+            message_id,
+            file_id,
         )
         # Bot might not be in the group — provide clear diagnostic
         return Response(
@@ -499,8 +530,11 @@ async def _do_pyro_stream(pyro, file_id: str, message_id: int,
     )
 
 
-async def stream_via_pyrogram(file_id: str, request: Request,
-                               file_size: int = 0, message_id: int = 0) -> Response:
+async def stream_via_pyrogram(
+        file_id: str,
+        request: Request,
+        file_size: int = 0,
+        message_id: int = 0) -> Response:
     """Try all Pyrogram clients in round-robin with pre-validation."""
     if not _pyro_clients:
         return Response(
@@ -523,7 +557,8 @@ async def stream_via_pyrogram(file_id: str, request: Request,
                 return resp
             # Got a 503 error — try next client
             last_error = resp.body.decode() if hasattr(resp, "body") else "unknown"
-            logger.warning("Client %d returned error, trying next: %s", id(pyro), last_error[:100])
+            logger.warning("Client %d returned error, trying next: %s", id(
+                pyro), last_error[:100])
             continue
         except Exception as exc:
             last_error = str(exc)
@@ -597,9 +632,12 @@ async def stream_via_botapi(file_id: str, request: Request) -> Response:
     )
 
 
-# ── Public API ────────────────────────────────────────────────────────────────
+# ── Public API ──────────────────────────────────────────────────────────
 
-async def stream_file(file_id: str, request: Request, file_size: int = 0) -> Response:
+async def stream_file(
+        file_id: str,
+        request: Request,
+        file_size: int = 0) -> Response:
     """Main dispatcher: Pyrogram (MTProto) → Bot API fallback."""
     info = _lookup_file_info(file_id)
     if not file_size:
@@ -671,8 +709,7 @@ async def debug_stream_test(file_id: str) -> dict:
     if msg is None:
         result["msg_error"] = (
             f"Cannot get message {info['message_id']} from group {PRIVATE_GROUP_ID}. "
-            "Bot is likely NOT a member of the private group."
-        )
+            "Bot is likely NOT a member of the private group.")
 
     # Try to get first chunk
     target = msg or file_id

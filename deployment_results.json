@@ -1,0 +1,92 @@
+{
+  "timestamp": "2026-05-09T06:50:43.856014",
+  "dry_run": false,
+  "spaces": {
+    "ToolKit-backend/PopCorn": {
+      "success": false,
+      "space_name": "ToolKit-backend/PopCorn",
+      "description": "Main PopCorn Space",
+      "priority": 1,
+      "files_uploaded": 45,
+      "env_vars_set": 5,
+      "build_status": "failed",
+      "errors": [
+        "Build failed with status: BUILD_ERROR"
+      ],
+      "warnings": [
+        "Health check: HTTP 503"
+      ],
+      "duration": 55.0414879322052
+    },
+    "ToolKit-backend/popcorn-main": {
+      "success": false,
+      "space_name": "ToolKit-backend/popcorn-main",
+      "description": "PopCorn Main Mirror",
+      "priority": 2,
+      "files_uploaded": 45,
+      "env_vars_set": 5,
+      "build_status": "failed",
+      "errors": [
+        "Build failed with status: BUILD_ERROR"
+      ],
+      "warnings": [
+        "Health check: HTTP 503"
+      ],
+      "duration": 78.42725920677185
+    },
+    "ToolKit-backend/popcorn-streaming": {
+      "success": false,
+      "space_name": "ToolKit-backend/popcorn-streaming",
+      "description": "PopCorn Streaming Space",
+      "priority": 3,
+      "files_uploaded": 45,
+      "env_vars_set": 5,
+      "build_status": "failed",
+      "errors": [
+        "Build failed with status: BUILD_ERROR"
+      ],
+      "warnings": [
+        "Health check: HTTP 503"
+      ],
+      "duration": 64.96849536895752
+    },
+    "rayig/popcorn-backup": {
+      "success": false,
+      "space_name": "rayig/popcorn-backup",
+      "description": "PopCorn Backup Space",
+      "priority": 4,
+      "files_uploaded": 45,
+      "env_vars_set": 5,
+      "build_status": "failed",
+      "errors": [
+        "Build failed with status: BUILD_ERROR"
+      ],
+      "warnings": [
+        "Health check: HTTP 503"
+      ],
+      "duration": 39.30738687515259
+    },
+    "rayig/popcorn-analytics": {
+      "success": false,
+      "space_name": "rayig/popcorn-analytics",
+      "description": "PopCorn Analytics Space",
+      "priority": 5,
+      "files_uploaded": 45,
+      "env_vars_set": 5,
+      "build_status": "failed",
+      "errors": [
+        "Build failed with status: BUILD_ERROR"
+      ],
+      "warnings": [
+        "Health check: HTTP 503"
+      ],
+      "duration": 48.29498267173767
+    }
+  },
+  "summary": {
+    "total": 5,
+    "successful": 0,
+    "failed": 5,
+    "warnings": 0
+  }
+}

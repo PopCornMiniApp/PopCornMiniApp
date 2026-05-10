@@ -1,0 +1,19 @@
+{
+  "timestamp": "2026-05-09 21:58:39",
+  "space_id": "ToolKit-backend/PopCorn",
+  "space_url": "https://huggingface.co/spaces/ToolKit-backend/PopCorn",
+  "api_url": "https://toolkit-backend-popcorn.hf.space",
+  "results": {
+    "build_status": "RUNTIME_ERROR",
+    "api_health": false,
+    "api_endpoints": {
+      "Movies API": "status_503",
+      "Series API": "status_503",
+      "Stats API": "status_503",
+      "Root endpoint": "status_503"
+    },
+    "files_present": true,
+    "no_import_errors": false,
+    "bot_connected": false
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "timestamp": "2026-05-09T22:08:19.660556",
+  "space_status": {
+    "accessible": true,
+    "status_code": 404
+  },
+  "api_results": {
+    "Health": {
+      "success": false,
+      "status_code": 404
+    },
+    "Stats": {
+      "success": false,
+      "status_code": 404
+    },
+    "Movies": {
+      "success": false,
+      "status_code": 404
+    },
+    "Series": {
+      "success": false,
+      "status_code": 404
+    }
+  }
+}

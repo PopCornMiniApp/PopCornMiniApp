@@ -1,0 +1,901 @@
+"""
+PopCorn Telegram Bot - Main User Interface
+Complete bot system with registration, browsing, search, and user management.
+"""
+import logging
+from datetime import datetime
+from typing import Optional
+
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    CallbackQueryHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+    ConversationHandler
+)
+from telegram.error import TelegramError
+
+from app.config import MAIN_BOT_TOKEN, ADMIN_ID, SUBSCRIPTION_REQUIRED
+from app import database as db
+from app.subscription_checker import (
+    check_subscription,
+    send_subscription_prompt,
+    handle_subscription_check,
+    require_subscription
+)
+
+logger = logging.getLogger(__name__)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Conversation States
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Registration states
+REGISTRATION_NAME, REGISTRATION_LANGUAGE = range(2)
+
+# Pagination settings
+ITEMS_PER_PAGE = 10
+
+# ══════════════════════════════════════════════════════════════════════════════
+# User Registration System
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /start command with registration flow."""
+    user = update.effective_user
+    
+    # Check subscription first if required
+    if SUBSCRIPTION_REQUIRED:
+        is_subscribed, status = await check_subscription(user.id, context.bot)
+        if not is_subscribed:
+            await send_subscription_prompt(update, context)
+            return ConversationHandler.END
+    
+    # Check if user exists
+    existing_user = db.get_user(user.id)
+    
+    if existing_user:
+        # User already registered, show main menu
+        await show_main_menu(update, context)
+        return ConversationHandler.END
+    
+    # New user - start registration
+    welcome_text = (
+        f"🍿 **Welcome to PopCorn!**\n\n"
+        f"Hello {user.first_name}! 👋\n\n"
+        f"PopCorn is your ultimate destination for movies and series streaming.\n\n"
+        f"Let's get you set up! Please tell me your preferred name:"
+    )
+    
+    await update.message.reply_text(welcome_text, parse_mode="Markdown")
+    
+    return REGISTRATION_NAME
+
+
+async def registration_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle user name input during registration."""
+    user = update.effective_user
+    name = update.message.text.strip()
+    
+    # Store name in context
+    context.user_data['registration_name'] = name
+    
+    # Ask for language preference
+    keyboard = [
+        [
+            InlineKeyboardButton("🇬🇧 English", callback_data="lang_en"),
+            InlineKeyboardButton("🇸🇦 العربية", callback_data="lang_ar")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        f"Great, {name}! 👍\n\n"
+        f"Now, please select your preferred language:",
+        reply_markup=reply_markup
+    )
+    
+    return REGISTRATION_LANGUAGE
+
+
+async def registration_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle language selection and complete registration."""
+    query = update.callback_query
+    await query.answer()
+    
+    user = update.effective_user
+    language = query.data.split("_")[1]  # Extract 'en' or 'ar'
+    name = context.user_data.get('registration_name', user.first_name)
+    
+    # Create user in database
+    try:
+        db.create_or_update_user({
+            "user_id": user.id,
+            "username": user.username,
+            "first_name": name,
+            "last_name": user.last_name,
+            "language_code": language,
+            "is_bot": False,
+            "is_blocked": False,
+            "is_premium": False
+        })
+        
+        # Create user profile
+        db.create_or_update_user_profile(
+            user_id=user.id,
+            preferences={"language": language}
+        )
+        
+        # Log registration activity
+        db.log_user_activity(
+            user_id=user.id,
+            activity_type="login",
+            activity_details="First registration"
+        )
+        
+        success_text = (
+            f"✅ **Registration Complete!**\n\n"
+            f"Welcome aboard, {name}! 🎉\n\n"
+            f"You now have access to our entire library of movies and series.\n\n"
+            f"Use the menu below to start exploring! 🍿"
+        )
+        
+        await query.edit_message_text(success_text, parse_mode="Markdown")
+        
+        # Show main menu
+        await show_main_menu_callback(update, context)
+        
+    except Exception as e:
+        logger.error(f"Registration error for user {user.id}: {e}")
+        await query.edit_message_text(
+            "❌ Registration failed. Please try again with /start",
+            parse_mode="Markdown"
+        )
+    
+    return ConversationHandler.END
+
+
+async def cancel_registration(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cancel registration process."""
+    await update.message.reply_text(
+        "Registration cancelled. Use /start to begin again.",
+        parse_mode="Markdown"
+    )
+    return ConversationHandler.END
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Main Menu
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show main menu to user."""
+    user = update.effective_user
+    
+    # Get user info
+    user_data = db.get_user(user.id)
+    is_premium = user_data.get("is_premium", False) if user_data else False
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("🎬 Movies", callback_data="browse_movies"),
+            InlineKeyboardButton("📺 Series", callback_data="browse_series")
+        ],
+        [
+            InlineKeyboardButton("🔍 Search", callback_data="search_content"),
+            InlineKeyboardButton("⭐ Favorites", callback_data="my_favorites")
+        ],
+        [
+            InlineKeyboardButton("📊 My Profile", callback_data="my_profile"),
+            InlineKeyboardButton("📜 History", callback_data="my_history")
+        ]
+    ]
+    
+    if is_premium:
+        keyboard.append([InlineKeyboardButton("👑 Premium Features", callback_data="premium_features")])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    welcome_text = (
+        f"🍿 **PopCorn - Main Menu**\n\n"
+        f"Welcome back, {user.first_name}! 👋\n\n"
+        f"What would you like to watch today?"
+    )
+    
+    await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode="Markdown")
+
+
+async def show_main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show main menu from callback query."""
+    query = update.callback_query
+    await query.answer()
+    
+    user = update.effective_user
+    user_data = db.get_user(user.id)
+    is_premium = user_data.get("is_premium", False) if user_data else False
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("🎬 Movies", callback_data="browse_movies"),
+            InlineKeyboardButton("📺 Series", callback_data="browse_series")
+        ],
+        [
+            InlineKeyboardButton("🔍 Search", callback_data="search_content"),
+            InlineKeyboardButton("⭐ Favorites", callback_data="my_favorites")
+        ],
+        [
+            InlineKeyboardButton("📊 My Profile", callback_data="my_profile"),
+            InlineKeyboardButton("📜 History", callback_data="my_history")
+        ]
+    ]
+    
+    if is_premium:
+        keyboard.append([InlineKeyboardButton("👑 Premium Features", callback_data="premium_features")])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    welcome_text = (
+        f"🍿 **PopCorn - Main Menu**\n\n"
+        f"Welcome back, {user.first_name}! 👋\n\n"
+        f"What would you like to watch today?"
+    )
+    
+    await query.edit_message_text(welcome_text, reply_markup=reply_markup, parse_mode="Markdown")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Browse Movies
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def browse_movies(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Browse movies with pagination."""
+    query = update.callback_query
+    await query.answer()
+    
+    # Parse page number from callback data
+    page = 0
+    if "_" in query.data:
+        page = int(query.data.split("_")[-1])
+    
+    # Get movies from database
+    movies = db.get_movies()
+    
+    # Filter movies with files only
+    movies_with_files = [m for m in movies if m.get("file_id")]
+    
+    # Sort by rating
+    movies_with_files.sort(key=lambda x: x.get("rating", 0), reverse=True)
+    
+    # Pagination
+    total_movies = len(movies_with_files)
+    total_pages = (total_movies + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
+    start_idx = page * ITEMS_PER_PAGE
+    end_idx = start_idx + ITEMS_PER_PAGE
+    page_movies = movies_with_files[start_idx:end_idx]
+    
+    if not page_movies:
+        await query.edit_message_text(
+            "📭 No movies available at the moment.\n\n"
+            "Check back later for new content!",
+            parse_mode="Markdown"
+        )
+        return
+    
+    # Build keyboard with movie buttons
+    keyboard = []
+    for movie in page_movies:
+        title = movie.get("title", "Unknown")
+        rating = movie.get("rating", 0)
+        button_text = f"🎬 {title} ⭐ {rating:.1f}"
+        keyboard.append([InlineKeyboardButton(button_text, callback_data=f"movie_{movie['id']}")])
+    
+    # Pagination buttons
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton("⬅️ Previous", callback_data=f"browse_movies_{page-1}"))
+    if page < total_pages - 1:
+        nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"browse_movies_{page+1}"))
+    
+    if nav_buttons:
+        keyboard.append(nav_buttons)
+    
+    # Back button
+    keyboard.append([InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu")])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    text = (
+        f"🎬 **Movies Library**\n\n"
+        f"📊 Total Movies: {total_movies}\n"
+        f"📄 Page {page + 1} of {total_pages}\n\n"
+        f"Select a movie to watch:"
+    )
+    
+    await query.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+
+
+async def show_movie_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show detailed information about a movie."""
+    query = update.callback_query
+    await query.answer()
+    
+    movie_id = query.data.split("_")[1]
+    movie = db.get_movie(movie_id=movie_id)
+    
+    if not movie:
+        await query.edit_message_text("❌ Movie not found.")
+        return
+    
+    # Format movie details
+    title = movie.get("title", "Unknown")
+    title_ar = movie.get("title_ar", "")
+    overview = movie.get("overview", "No description available")
+    rating = movie.get("rating", 0)
+    release_date = movie.get("release_date", "Unknown")
+    runtime = movie.get("runtime", 0)
+    genres = movie.get("genres", "")
+    
+    text = f"🎬 **{title}**\n"
+    if title_ar:
+        text += f"_{title_ar}_\n"
+    text += f"\n⭐ Rating: {rating:.1f}/10\n"
+    text += f"📅 Release: {release_date}\n"
+    text += f"⏱️ Runtime: {runtime} min\n"
+    if genres:
+        text += f"🎭 Genres: {genres}\n"
+    text += f"\n📝 {overview[:200]}..."
+    
+    # Buttons
+    keyboard = [
+        [InlineKeyboardButton("▶️ Watch Now", callback_data=f"watch_movie_{movie_id}")],
+        [
+            InlineKeyboardButton("⭐ Add to Favorites", callback_data=f"fav_add_movie_{movie_id}"),
+            InlineKeyboardButton("📤 Share", callback_data=f"share_movie_{movie_id}")
+        ],
+        [InlineKeyboardButton("🔙 Back to Movies", callback_data="browse_movies")]
+    ]
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Browse Series
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def browse_series(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Browse series with pagination."""
+    query = update.callback_query
+    await query.answer()
+    
+    # Parse page number
+    page = 0
+    if "_" in query.data and query.data.split("_")[-1].isdigit():
+        page = int(query.data.split("_")[-1])
+    
+    # Get series from database
+    series_list = db.get_series_list()
+    
+    # Sort by rating
+    series_list.sort(key=lambda x: x.get("rating", 0), reverse=True)
+    
+    # Pagination
+    total_series = len(series_list)
+    total_pages = (total_series + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
+    start_idx = page * ITEMS_PER_PAGE
+    end_idx = start_idx + ITEMS_PER_PAGE
+    page_series = series_list[start_idx:end_idx]
+    
+    if not page_series:
+        await query.edit_message_text(
+            "📭 No series available at the moment.\n\n"
+            "Check back later for new content!",
+            parse_mode="Markdown"
+        )
+        return
+    
+    # Build keyboard
+    keyboard = []
+    for series in page_series:
+        title = series.get("title", "Unknown")
+        rating = series.get("rating", 0)
+        seasons = series.get("total_seasons", 0)
+        button_text = f"📺 {title} ({seasons}S) ⭐ {rating:.1f}"
+        keyboard.append([InlineKeyboardButton(button_text, callback_data=f"series_{series['id']}")])
+    
+    # Pagination buttons
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton("⬅️ Previous", callback_data=f"browse_series_{page-1}"))
+    if page < total_pages - 1:
+        nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"browse_series_{page+1}"))
+    
+    if nav_buttons:
+        keyboard.append(nav_buttons)
+    
+    # Back button
+    keyboard.append([InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu")])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    text = (
+        f"📺 **Series Library**\n\n"
+        f"📊 Total Series: {total_series}\n"
+        f"📄 Page {page + 1} of {total_pages}\n\n"
+        f"Select a series to watch:"
+    )
+    
+    await query.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+
+
+async def show_series_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show detailed information about a series."""
+    query = update.callback_query
+    await query.answer()
+    
+    series_id = query.data.split("_")[1]
+    series = db.get_series(series_id=series_id)
+    
+    if not series:
+        await query.edit_message_text("❌ Series not found.")
+        return
+    
+    # Get seasons
+    seasons = db.get_series_seasons(series_id)
+    
+    # Format series details
+    title = series.get("title", "Unknown")
+    title_ar = series.get("title_ar", "")
+    overview = series.get("overview", "No description available")
+    rating = series.get("rating", 0)
+    first_air_date = series.get("first_air_date", "Unknown")
+    total_seasons = series.get("total_seasons", 0)
+    status = series.get("status", "Unknown")
+    genres = series.get("genres", "")
+    
+    text = f"📺 **{title}**\n"
+    if title_ar:
+        text += f"_{title_ar}_\n"
+    text += f"\n⭐ Rating: {rating:.1f}/10\n"
+    text += f"📅 First Air: {first_air_date}\n"
+    text += f"📊 Seasons: {total_seasons}\n"
+    text += f"📡 Status: {status}\n"
+    if genres:
+        text += f"🎭 Genres: {genres}\n"
+    text += f"\n📝 {overview[:200]}..."
+    
+    # Buttons for seasons
+    keyboard = []
+    for season in seasons:
+        season_num = season["season_number"]
+        episode_count = season.get("episode_count", 0)
+        button_text = f"Season {season_num} ({episode_count} episodes)"
+        keyboard.append([InlineKeyboardButton(button_text, callback_data=f"season_{series_id}_{season_num}")])
+    
+    # Additional buttons
+    keyboard.append([
+        InlineKeyboardButton("⭐ Add to Favorites", callback_data=f"fav_add_series_{series_id}"),
+        InlineKeyboardButton("📤 Share", callback_data=f"share_series_{series_id}")
+    ])
+    keyboard.append([InlineKeyboardButton("🔙 Back to Series", callback_data="browse_series")])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+
+
+async def show_season_episodes(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show episodes for a specific season."""
+    query = update.callback_query
+    await query.answer()
+    
+    # Parse series_id and season_number
+    parts = query.data.split("_")
+    series_id = parts[1]
+    season_number = int(parts[2])
+    
+    # Get episodes
+    episodes = db.get_episodes(series_id, season_number)
+    
+    if not episodes:
+        await query.edit_message_text(
+            f"📭 No episodes found for Season {season_number}.",
+            parse_mode="Markdown"
+        )
+        return
+    
+    # Get series info
+    series = db.get_series(series_id=series_id)
+    series_title = series.get("title", "Unknown") if series else "Unknown"
+    
+    # Build keyboard
+    keyboard = []
+    for episode in episodes:
+        ep_num = episode["episode_number"]
+        ep_title = episode.get("title", f"Episode {ep_num}")
+        has_file = "✅" if episode.get("file_id") else "❌"
+        button_text = f"{has_file} E{ep_num}: {ep_title}"
+        keyboard.append([InlineKeyboardButton(button_text, callback_data=f"episode_{series_id}_{season_number}_{ep_num}")])
+    
+    # Back button
+    keyboard.append([InlineKeyboardButton("🔙 Back to Series", callback_data=f"series_{series_id}")])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    text = (
+        f"📺 **{series_title}**\n"
+        f"Season {season_number}\n\n"
+        f"📊 Total Episodes: {len(episodes)}\n\n"
+        f"Select an episode to watch:"
+    )
+    
+    await query.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Search Functionality
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def search_content(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Initiate search mode."""
+    query = update.callback_query
+    await query.answer()
+    
+    text = (
+        "🔍 **Search Content**\n\n"
+        "Send me the title of a movie or series you're looking for.\n\n"
+        "Type /cancel to return to the main menu."
+    )
+    
+    await query.edit_message_text(text, parse_mode="Markdown")
+    
+    # Set user in search mode
+    context.user_data['search_mode'] = True
+
+
+async def handle_search_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle search query from user."""
+    if not context.user_data.get('search_mode'):
+        return
+    
+    query_text = update.message.text.strip().lower()
+    user = update.effective_user
+    
+    # Log search
+    db.log_search(query=query_text, user_id=user.id)
+    
+    # Search in movies
+    movies = db.get_movies()
+    movie_results = [
+        m for m in movies
+        if query_text in m.get("title", "").lower() or 
+           query_text in m.get("title_ar", "").lower()
+    ]
+    
+    # Search in series
+    series_list = db.get_series_list()
+    series_results = [
+        s for s in series_list
+        if query_text in s.get("title", "").lower() or 
+           query_text in s.get("title_ar", "").lower()
+    ]
+    
+    total_results = len(movie_results) + len(series_results)
+    
+    if total_results == 0:
+        await update.message.reply_text(
+            f"😔 No results found for: **{query_text}**\n\n"
+            f"Try a different search term or browse our library.",
+            parse_mode="Markdown"
+        )
+        context.user_data['search_mode'] = False
+        return
+    
+    # Build results keyboard
+    keyboard = []
+    
+    # Add movie results
+    for movie in movie_results[:5]:  # Limit to 5
+        title = movie.get("title", "Unknown")
+        rating = movie.get("rating", 0)
+        button_text = f"🎬 {title} ⭐ {rating:.1f}"
+        keyboard.append([InlineKeyboardButton(button_text, callback_data=f"movie_{movie['id']}")])
+    
+    # Add series results
+    for series in series_results[:5]:  # Limit to 5
+        title = series.get("title", "Unknown")
+        rating = series.get("rating", 0)
+        button_text = f"📺 {title} ⭐ {rating:.1f}"
+        keyboard.append([InlineKeyboardButton(button_text, callback_data=f"series_{series['id']}")])
+    
+    # Back button
+    keyboard.append([InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu")])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    text = (
+        f"🔍 **Search Results**\n\n"
+        f"Found {total_results} results for: **{query_text}**\n\n"
+        f"🎬 Movies: {len(movie_results)}\n"
+        f"📺 Series: {len(series_results)}"
+    )
+    
+    await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+    
+    # Exit search mode
+    context.user_data['search_mode'] = False
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# User Profile & History
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def show_user_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show user profile information."""
+    query = update.callback_query
+    await query.answer()
+    
+    user = update.effective_user
+    user_data = db.get_user(user.id)
+    user_stats = db.get_user_statistics(user.id)
+    
+    if not user_data:
+        await query.edit_message_text("❌ Profile not found.")
+        return
+    
+    # Format profile info
+    username = user_data.get("username", "N/A")
+    is_premium = "👑 Premium" if user_data.get("is_premium") else "🆓 Free"
+    created_at = user_data.get("created_at", "Unknown")
+    
+    watch_time_hours = user_stats.get("total_watch_time", 0) / 3600 if user_stats else 0
+    movies_watched = user_stats.get("total_movies_watched", 0) if user_stats else 0
+    episodes_watched = user_stats.get("total_episodes_watched", 0) if user_stats else 0
+    
+    text = (
+        f"👤 **Your Profile**\n\n"
+        f"**Name:** {user.first_name}\n"
+        f"**Username:** @{username}\n"
+        f"**Status:** {is_premium}\n"
+        f"**Member Since:** {created_at[:10]}\n\n"
+        f"📊 **Statistics:**\n"
+        f"• Watch Time: {watch_time_hours:.1f} hours\n"
+        f"• Movies Watched: {movies_watched}\n"
+        f"• Episodes Watched: {episodes_watched}\n"
+        f"• Total Content: {movies_watched + episodes_watched}"
+    )
+    
+    keyboard = [
+        [InlineKeyboardButton("⚙️ Settings", callback_data="user_settings")],
+        [InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu")]
+    ]
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+
+
+async def show_watch_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show user's watch history."""
+    query = update.callback_query
+    await query.answer()
+    
+    user = update.effective_user
+    history = db.get_watch_history(user.id, limit=10)
+    
+    if not history:
+        text = "📜 **Watch History**\n\nYou haven't watched anything yet!"
+        keyboard = [[InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+        return
+    
+    text = "📜 **Watch History**\n\nYour recently watched content:\n\n"
+    
+    for item in history:
+        content_type = item.get("content_type")
+        if content_type == "movie":
+            movie = db.get_movie(movie_id=item.get("content_id"))
+            if movie:
+                title = movie.get("title", "Unknown")
+                text += f"🎬 {title}\n"
+        elif content_type == "episode":
+            series_id = item.get("series_id")
+            season = item.get("season_number")
+            episode = item.get("episode_number")
+            series = db.get_series(series_id=series_id)
+            if series:
+                title = series.get("title", "Unknown")
+                text += f"📺 {title} - S{season}E{episode}\n"
+    
+    keyboard = [[InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Favorites System
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def show_favorites(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show user's favorite content."""
+    query = update.callback_query
+    await query.answer()
+    
+    user = update.effective_user
+    favorites = db.get_user_favorites(user.id)
+    
+    if not favorites:
+        text = "⭐ **My Favorites**\n\nYou haven't added any favorites yet!"
+        keyboard = [[InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+        return
+    
+    # Build keyboard
+    keyboard = []
+    for fav in favorites:
+        content_type = fav.get("content_type")
+        content_id = fav.get("content_id")
+        
+        if content_type == "movie":
+            movie = db.get_movie(movie_id=content_id)
+            if movie:
+                title = movie.get("title", "Unknown")
+                keyboard.append([InlineKeyboardButton(f"🎬 {title}", callback_data=f"movie_{content_id}")])
+        elif content_type == "series":
+            series = db.get_series(series_id=content_id)
+            if series:
+                title = series.get("title", "Unknown")
+                keyboard.append([InlineKeyboardButton(f"📺 {title}", callback_data=f"series_{content_id}")])
+    
+    keyboard.append([InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu")])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    text = f"⭐ **My Favorites**\n\nYou have {len(favorites)} favorites:"
+    
+    await query.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+
+
+async def add_to_favorites(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Add content to user's favorites."""
+    query = update.callback_query
+    await query.answer()
+    
+    user = update.effective_user
+    
+    # Parse callback data
+    parts = query.data.split("_")
+    content_type = parts[2]  # 'movie' or 'series'
+    content_id = parts[3]
+    
+    try:
+        db.add_to_favorites(user.id, content_type, content_id)
+        await query.answer("✅ Added to favorites!", show_alert=True)
+    except Exception as e:
+        logger.error(f"Error adding to favorites: {e}")
+        await query.answer("❌ Failed to add to favorites", show_alert=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Callback Query Router
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Route callback queries to appropriate handlers."""
+    query = update.callback_query
+    data = query.data
+    
+    # Subscription check
+    if data == "check_subscription":
+        await handle_subscription_check(update, context)
+        return
+    
+    # Main menu
+    if data == "main_menu":
+        await show_main_menu_callback(update, context)
+    
+    # Browse movies
+    elif data.startswith("browse_movies"):
+        await browse_movies(update, context)
+    
+    # Browse series
+    elif data.startswith("browse_series"):
+        await browse_series(update, context)
+    
+    # Movie details
+    elif data.startswith("movie_") and not data.startswith("movie_watch"):
+        await show_movie_details(update, context)
+    
+    # Series details
+    elif data.startswith("series_"):
+        await show_series_details(update, context)
+    
+    # Season episodes
+    elif data.startswith("season_"):
+        await show_season_episodes(update, context)
+    
+    # Search
+    elif data == "search_content":
+        await search_content(update, context)
+    
+    # Profile
+    elif data == "my_profile":
+        await show_user_profile(update, context)
+    
+    # History
+    elif data == "my_history":
+        await show_watch_history(update, context)
+    
+    # Favorites
+    elif data == "my_favorites":
+        await show_favorites(update, context)
+    
+    # Add to favorites
+    elif data.startswith("fav_add_"):
+        await add_to_favorites(update, context)
+    
+    else:
+        await query.answer("Feature coming soon!", show_alert=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Bot Initialization
+# ══════════════════════════════════════════════════════════════════════════════
+
+def create_bot_application() -> Application:
+    """Create and configure the bot application."""
+    
+    # Create application
+    application = Application.builder().token(MAIN_BOT_TOKEN).build()
+    
+    # Registration conversation handler
+    registration_handler = ConversationHandler(
+        entry_points=[CommandHandler("start", start_command)],
+        states={
+            REGISTRATION_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, registration_name)],
+            REGISTRATION_LANGUAGE: [CallbackQueryHandler(registration_language, pattern="^lang_")]
+        },
+        fallbacks=[CommandHandler("cancel", cancel_registration)]
+    )
+    
+    # Add handlers
+    application.add_handler(registration_handler)
+    application.add_handler(CommandHandler("menu", show_main_menu))
+    application.add_handler(CallbackQueryHandler(handle_callback_query))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_search_query))
+    
+    logger.info("✅ Bot application created and configured")
+    
+    return application
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Main Function
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def main():
+    """Main function to run the bot."""
+    logger.info("🤖 Starting PopCorn Bot...")
+    
+    # Initialize database
+    db.init_db()
+    
+    # Create and run bot
+    application = create_bot_application()
+    
+    logger.info("✅ Bot is running!")
+    await application.run_polling(allowed_updates=Update.ALL_TYPES)
+
+
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(main())
+
+# Made with Bob

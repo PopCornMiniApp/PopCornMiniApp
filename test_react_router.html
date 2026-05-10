@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>React Router Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            background: #0d0d0d;
+            color: white;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 10px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+        #output {
+            margin-top: 20px;
+            padding: 20px;
+            background: #1a1a1a;
+            border-radius: 8px;
+        }
+    </style>
+</head>
+<body>
+    <h1>React Router Navigation Test</h1>
+    
+    <div>
+        <button onclick="testDirectURL()">Test Direct URL</button>
+        <button onclick="testAPICall()">Test API Call</button>
+        <button onclick="openInNewTab()">Open in New Tab</button>
+    </div>
+    
+    <div id="output"></div>
+    
+    <script>
+        const output = document.getElementById('output');
+        
+        function base64UrlEncode(str) {
+            return btoa(str)
+                .replace(/\+/g, '-')
+                .replace(/\//g, '_')
+                .replace(/=/g, '');
+        }
+        
+        function encodeContentUrl(type, id) {
+            const data = JSON.stringify({ t: type, i: id });
+            const encoded = base64UrlEncode(data);
+            return `/w/${encoded}`;
+        }
+        
+        function testDirectURL() {
+            const url = encodeContentUrl('movie', 'mid00033');
+            output.innerHTML = `
+                <h3>Encoded URL:</h3>
+                <p>${url}</p>
+                <h3>Full URL:</h3>
+                <p><a href="http://localhost:7860${url}" target="_blank">http://localhost:7860${url}</a></p>
+                <p>Click the link above to test</p>
+            `;
+        }
+        
+        async function testAPICall() {
+            try {
+                const response = await fetch('http://localhost:7860/api/movies/mid00033');
+                const data = await response.json();
+                output.innerHTML = `
+                    <h3>API Response:</h3>
+                    <pre>${JSON.stringify(data, null, 2)}</pre>
+                `;
+            } catch (error) {
+                output.innerHTML = `<p style="color: red;">Error: ${error.message}</p>`;
+            }
+        }
+        
+        function openInNewTab() {
+            const url = encodeContentUrl('movie', 'mid00033');
+            window.open(`http://localhost:7860${url}`, '_blank');
+        }
+    </script>
+</body>
+</html>
